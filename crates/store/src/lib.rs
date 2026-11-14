@@ -108,7 +108,14 @@ const MEDIA_EXTENSIONS: &[&str] = &[
 ];
 
 /// Noms de fichiers système à ignorer.
-const IGNORED_NAMES: &[&str] = &["Thumbs.db", "desktop.ini"];
+/// Fichiers et dossiers système à ignorer (y compris à la racine d'un disque Windows).
+const IGNORED_NAMES: &[&str] = &[
+    "Thumbs.db",
+    "desktop.ini",
+    "System Volume Information",
+    "$RECYCLE.BIN",
+    "$Recycle.Bin",
+];
 
 /// Décrit un fichier ou un dossier (récursivement) sous forme de manifeste.
 ///
@@ -119,14 +126,16 @@ const IGNORED_NAMES: &[&str] = &["Thumbs.db", "desktop.ini"];
 /// - les hash ne sont pas calculés ici (`root_hash` reste vide).
 pub fn scan(path: &Path) -> io::Result<Manifest> {
     let metadata = fs::symlink_metadata(path)?;
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.display().to_string());
+    let name = content_name(path);
 
     let mut files = Vec::new();
     if metadata.is_file() {
-        files.push(entry(name.clone(), &metadata));
+        // Le chemin relatif d'un fichier seul est son vrai nom, pour le relire.
+        let file_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| name.clone());
+        files.push(entry(file_name, &metadata));
     } else if metadata.is_dir() {
         walk(path, path, &mut files)?;
         files.sort_by(|a, b| a.path.cmp(&b.path));
@@ -138,6 +147,49 @@ pub fn scan(path: &Path) -> io::Result<Manifest> {
     }
 
     Ok(Manifest { name, files })
+}
+
+/// Nom du contenu tel que le verra le destinataire : le nom du dossier ou du
+/// fichier, sans caractère interdit. Une racine de disque (`G:\` sous Windows,
+/// `/` ailleurs) n'a pas de nom : elle devient `Disque_G`.
+pub fn content_name(path: &Path) -> String {
+    if let Some(name) = path.file_name() {
+        let clean = sanitize_name(&name.to_string_lossy());
+        if !clean.is_empty() {
+            return clean;
+        }
+    }
+    let letters: String = path
+        .to_string_lossy()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .collect();
+    if letters.is_empty() {
+        "Disque".to_string()
+    } else {
+        format!("Disque_{letters}")
+    }
+}
+
+/// Remplace les caractères interdits dans un nom de fichier (Windows compris)
+/// et retire les espaces et points en début ou fin de nom.
+fn sanitize_name(name: &str) -> String {
+    let replaced: String = name
+        .chars()
+        .map(|c| {
+            if "<>:\"/\\|?*".contains(c) || c.is_control() {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let trimmed = replaced.trim_matches(|c| c == ' ' || c == '.');
+    if trimmed.chars().all(|c| c == '_') {
+        String::new()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 fn walk(root: &Path, dir: &Path, files: &mut Vec<FileEntry>) -> io::Result<()> {
@@ -270,6 +322,27 @@ mod tests {
             files: vec![],
         };
         assert!(layout(Path::new("/dest"), &evil).is_err());
+    }
+
+    #[test]
+    fn content_names() {
+        assert_eq!(content_name(Path::new("/rushes/J04")), "J04");
+        assert_eq!(content_name(Path::new("/rushes/clip.braw")), "clip.braw");
+        assert_eq!(sanitize_name("J04: jour 4?"), "J04_ jour 4_");
+        assert_eq!(sanitize_name(" ..carte. "), "carte");
+        assert_eq!(sanitize_name(":"), "");
+        // Racine : jamais de nom vide ni de caractère interdit.
+        let root = content_name(Path::new("/"));
+        assert!(is_safe_relative_path(&root) && !root.contains('/'));
+        assert!(root.starts_with("Disque"));
+    }
+
+    #[test]
+    fn system_folders_are_ignored() {
+        assert!(is_ignored("System Volume Information"));
+        assert!(is_ignored("$RECYCLE.BIN"));
+        assert!(is_ignored(".Spotlight-V100"));
+        assert!(!is_ignored("A001"));
     }
 
     #[test]
