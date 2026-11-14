@@ -57,6 +57,18 @@ pub enum PathKind {
     Unknown,
 }
 
+impl PathKind {
+    /// Identifiant stable, pour l'interface : `local`, `direct`, `relay`, `unknown`.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Direct => "direct",
+            Self::Relay => "relay",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
 impl fmt::Display for PathKind {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let label = match self {

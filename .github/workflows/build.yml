@@ -1,6 +1,7 @@
 name: Compilation
 
-# Déclenchement manuel uniquement (bouton « Run workflow »), jamais à chaque push.
+# Déclenchement manuel uniquement (onglet Actions > Compilation > Run workflow),
+# jamais à chaque push.
 on:
   workflow_dispatch:
 
@@ -15,41 +16,65 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace
+      # L'application Tauri demande WebKitGTK sous Linux : seul le moteur est testé ici.
+      - run: cargo test --workspace --exclude lugus-app
 
-  windows:
-    name: Windows
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace
-      - run: cargo build --release -p lugus-cli
-      - uses: actions/upload-artifact@v4
-        with:
-          name: lugus-windows-x64
-          path: target/release/lugus.exe
-
-  macos:
-    name: macOS (universel)
-    runs-on: macos-latest
+  build:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            tauri_args: ""
+          - name: macOS (universel)
+            os: macos-latest
+            tauri_args: "--target universal-apple-darwin"
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          targets: ${{ matrix.os == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace
-      - run: cargo build --release -p lugus-cli --target aarch64-apple-darwin
-      - run: cargo build --release -p lugus-cli --target x86_64-apple-darwin
-      - name: Binaire universel (Apple Silicon et Intel)
+
+      - name: Tests du moteur
+        run: cargo test --workspace --exclude lugus-app
+
+      # Ligne de commande
+      - name: CLI Windows
+        if: runner.os == 'Windows'
+        shell: bash
         run: |
+          cargo build --release -p lugus-cli
+          mkdir -p dist && cp target/release/lugus.exe dist/
+      - name: CLI macOS universel
+        if: runner.os == 'macOS'
+        run: |
+          cargo build --release -p lugus-cli --target aarch64-apple-darwin
+          cargo build --release -p lugus-cli --target x86_64-apple-darwin
           mkdir -p dist
           lipo -create -output dist/lugus \
             target/aarch64-apple-darwin/release/lugus \
             target/x86_64-apple-darwin/release/lugus
+
+      # Application
+      - name: CLI Tauri
+        run: cargo install tauri-cli --version "^2" --locked
+      - name: Application
+        working-directory: src-tauri
+        run: cargo tauri build ${{ matrix.tauri_args }}
+      - name: Exe portable Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: cp target/release/lugus-app.exe "dist/Lugus Transfer_$(grep -m1 '"version"' src-tauri/tauri.conf.json | cut -d'"' -f4)_portable.exe"
+
       - uses: actions/upload-artifact@v4
         with:
-          name: lugus-macos-universel
-          path: dist/lugus
+          name: lugus-${{ runner.os }}
+          path: |
+            dist/*
+            target/**/release/bundle/**/*.msi
+            target/**/release/bundle/**/*.exe
+            target/**/release/bundle/**/*.dmg

@@ -10,6 +10,12 @@
 //! L'intégrité en route est déjà garantie par QUIC (chiffrement authentifié).
 //! Les hash servent à vérifier ce qui est réellement écrit sur le disque et à
 //! reprendre un transfert interrompu sans doute possible.
+//!
+//! Les sessions complètes (poignée de main, événements, anti-veille, mode
+//! Noctiluca) sont dans le module `session`.
+
+pub mod power;
+pub mod session;
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
@@ -23,7 +29,7 @@ use lugus_core::protocol::{
 use lugus_noctiluca::{
     net_err, recv_msg, send_msg, Connection, RecvStream, SendStream, HANDSHAKE_MAX_LEN,
 };
-use lugus_store::incoming::{hash_file, Incoming, Opened};
+use lugus_store::incoming::{hash_file, Incoming, Opened, Verified};
 use tokio::io::AsyncReadExt;
 use tokio::task::{spawn_blocking, JoinSet};
 
@@ -164,8 +170,17 @@ async fn refuse(send: &mut SendStream, error: ProtocolError) -> Result<()> {
 // Récepteur
 // ---------------------------------------------------------------------------
 
-/// Fichier reçu et vérifié : chemin relatif (manifeste) et hash BLAKE3.
-pub type Received = (String, Hash);
+/// Fichier reçu et vérifié : indice et chemin relatif dans le manifeste, et
+/// résultat de la relecture du disque.
+#[derive(Debug, Clone)]
+pub struct Received {
+    pub index: u32,
+    pub path: String,
+    pub verified: Verified,
+}
+
+/// Appelé à chaque fichier vérifié.
+pub type OnFileDone = Arc<dyn Fn(&Received) + Send + Sync>;
 
 /// Ordre de demande des fichiers : la sélection, avec les proxys puis les
 /// fichiers annexes avant les originaux si demandé.
@@ -196,6 +211,7 @@ pub async fn fetch(
     base: PathBuf,
     parallel: usize,
     received: Arc<AtomicU64>,
+    on_done: OnFileDone,
 ) -> Result<Vec<Received>> {
     let queue = Arc::new(Mutex::new(VecDeque::from(order)));
     let results = Arc::new(Mutex::new(Vec::new()));
@@ -208,9 +224,11 @@ pub async fn fetch(
         let results = results.clone();
         let base = base.clone();
         let received = received.clone();
+        let on_done = on_done.clone();
         workers.spawn(async move {
             while let Some(index) = next_job(&queue) {
                 let done = fetch_file(&conn, &manifest, index, &base, &received).await?;
+                on_done(&done);
                 results.lock().expect("verrou empoisonné").push(done);
             }
             Ok::<(), anyhow::Error>(())
@@ -262,14 +280,18 @@ async fn fetch_file(
             send.finish().map_err(net_err)?;
             let source_hash = expect_done(&mut recv, &entry.path).await?;
             let local = spawn_blocking(move || hash_file(&path)).await??;
-            if source_hash != Some(local) {
+            if source_hash != Some(local.blake3) {
                 bail!(
                     "{} existe déjà à destination mais diffère de la source",
                     entry.path
                 );
             }
             received.fetch_add(entry.size, Ordering::Relaxed);
-            Ok((entry.path, local))
+            Ok(Received {
+                index,
+                path: entry.path,
+                verified: local,
+            })
         }
         Opened::Partial(mut incoming) => {
             let offset = incoming.offset();
@@ -302,10 +324,14 @@ async fn fetch_file(
                         received.fetch_add(u64::from(len), Ordering::Relaxed);
                     }
                     Message::FileDone { full_hash } => {
-                        let full = spawn_blocking(move || incoming.finish(full_hash))
+                        let verified = spawn_blocking(move || incoming.finish(full_hash))
                             .await?
                             .with_context(|| format!("vérification de {}", entry.path))?;
-                        return Ok((entry.path, full));
+                        return Ok(Received {
+                            index,
+                            path: entry.path,
+                            verified,
+                        });
                     }
                     Message::Error(error) => {
                         bail!("{} : refusé par l'émetteur ({error:?})", entry.path)

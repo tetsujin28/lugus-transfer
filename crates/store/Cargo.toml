@@ -1,6 +1,6 @@
 [package]
 name = "lugus-store"
-description = "Fichiers et intégrité : manifeste, BLAKE3, blocs, reprise, MHL"
+description = "Fichiers et intégrité : manifeste, BLAKE3, blocs, reprise, relecture sans cache, MHL"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -9,4 +9,9 @@ repository.workspace = true
 
 [dependencies]
 blake3 = { workspace = true }
+chrono = { workspace = true }
 lugus-core = { workspace = true }
+xxhash-rust = { workspace = true }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

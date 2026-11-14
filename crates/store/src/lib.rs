@@ -1,14 +1,13 @@
 //! Fichiers et intégrité.
 //!
 //! - construction du manifeste à partir d'un fichier ou d'un dossier ;
-//! - réception par blocs avec reprise et vérification par relecture
-//!   (module `incoming`) ;
-//! - liste des hash au format `b3sum`, vérifiable avec `b3sum --check`.
-//!
-//! Le MHL (ASC MHL) viendra plus tard : il n'accepte pas BLAKE3 et demandera un
-//! hash xxHash calculé en plus.
+//! - réception par blocs avec reprise et vérification par relecture sans cache
+//!   (modules `incoming` et `rawio`) ;
+//! - MHL 1.1 en xxHash64 (module `mhl`), comme Bandua.
 
 pub mod incoming;
+pub mod mhl;
+pub mod rawio;
 
 use std::fmt::Write as _;
 use std::fs;
@@ -20,7 +19,7 @@ use lugus_core::protocol::{FileEntry, FileKind, Hash, Manifest};
 
 /// Où écrire les fichiers reçus.
 pub struct Layout {
-    /// Dossier racine des chemins du manifeste.
+    /// Dossier racine des chemins du manifeste (et dossier du MHL).
     pub base: PathBuf,
     /// Préfixe à ajouter aux chemins pour les exprimer depuis la destination.
     pub prefix: String,
@@ -72,23 +71,26 @@ pub fn source_path(root: &Path, entry: &FileEntry) -> PathBuf {
     path
 }
 
-/// Écrit `dest/<nom>.lugus.b3` au format `b3sum` (`hash  chemin`, chemins relatifs
-/// à `dest`). Renvoie le chemin du fichier et le BLAKE3 de son contenu.
-pub fn write_hash_list(
-    dest: &Path,
-    manifest_name: &str,
-    prefix: &str,
-    hashes: &[(String, Hash)],
-) -> io::Result<(PathBuf, Hash)> {
+/// Liste canonique des hash BLAKE3 (`hash  chemin`, triée par chemin) et son
+/// propre BLAKE3, qui sert d'empreinte à l'accusé de réception.
+pub fn hash_list(hashes: &[(String, Hash)]) -> (String, Hash) {
     let mut sorted: Vec<&(String, Hash)> = hashes.iter().collect();
     sorted.sort_by(|a, b| a.0.cmp(&b.0));
     let mut content = String::new();
     for (path, hash) in sorted {
-        let _ = writeln!(content, "{}  {prefix}{path}", hex(hash));
+        let _ = writeln!(content, "{}  {path}", hex(hash));
     }
-    let list_path = dest.join(format!("{manifest_name}.lugus.b3"));
-    fs::write(&list_path, content.as_bytes())?;
-    Ok((list_path, *blake3::hash(content.as_bytes()).as_bytes()))
+    let digest = *blake3::hash(content.as_bytes()).as_bytes();
+    (content, digest)
+}
+
+/// Nom du MHL écrit par Lugus, distinct de celui de Bandua pour ne jamais
+/// écraser un MHL déjà présent dans le dossier reçu.
+pub fn mhl_file_name(manifest_name: &str, when: &chrono::DateTime<chrono::Local>) -> String {
+    format!(
+        "{manifest_name}_lugus_{}.mhl",
+        when.format("%Y-%m-%d_%H%M%S")
+    )
 }
 
 /// Hash en hexadécimal minuscule.
@@ -179,7 +181,6 @@ fn is_ignored(file_name: &str) -> bool {
         || IGNORED_NAMES.contains(&file_name)
         || file_name.ends_with(".lugus-part")
         || file_name.ends_with(".lugus-journal")
-        || file_name.ends_with(".lugus.b3")
 }
 
 /// Chemin relatif avec `/`, uniquement fait de composants normaux.

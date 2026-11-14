@@ -1,16 +1,21 @@
 [package]
 name = "lugus-transfer"
-description = "Sessions d'envoi et de réception, ordonnancement des fichiers"
+description = "Transfert des fichiers et sessions complètes d'envoi et de réception"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 authors.workspace = true
+license.workspace = true
 repository.workspace = true
 
 [dependencies]
 anyhow = { workspace = true }
 blake3 = { workspace = true }
+chrono = { workspace = true }
+keepawake = { workspace = true }
+lugus-auth = { workspace = true }
 lugus-core = { workspace = true }
 lugus-noctiluca = { workspace = true }
 lugus-store = { workspace = true }
+serde = { workspace = true }
 tokio = { workspace = true }

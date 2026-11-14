@@ -2,101 +2,48 @@
 
 Transfert pair à pair de très gros fichiers vidéo, sans serveur à maintenir.
 
-L'émetteur partage un lien (`lugus://r/<clé>`) et un code (`4821-lanterne-7`).
-Le récepteur clique sur le lien, tape le code, et les fichiers arrivent en direct
-d'une machine à l'autre, chiffrés de bout en bout et vérifiés par blocs.
+L'émetteur glisse un dossier dans l'application et partage un lien (`lugus://r/<clé>`) et un code (`4821-lanterne-7`). Le destinataire colle le lien, tape le code, et les fichiers arrivent directement d'une machine à l'autre, chiffrés de bout en bout. Chaque fichier est relu sur le disque de destination, sans le cache du système, et comparé à la source. Un MHL est écrit à l'arrivée.
 
-Lugus est le dieu messager des Celtibères. Noctiluca, la déesse lunaire de la
-côte tartessienne, donne son nom au module de découverte réseau.
+Lugus est le dieu messager des Celtibères. Noctiluca, la déesse lunaire de la côte tartessienne, donne son nom au module de découverte réseau et au mode de transfert de nuit.
 
-## État
+Lugus Transfer by Domingo Olmo Martin. Application sœur de [Bandua](https://github.com/tetsujin28/bandua) et d'[Ataecina](https://github.com/tetsujin28/ataecina).
 
-Étape 3 : découverte par la DHT, authentification par code, puis transfert
-complet des fichiers avec reprise et vérification par relecture du disque.
-L'interface Tauri et le MHL viendront ensuite.
+## Fonctionnement
 
-| Crate | Rôle | État |
-|---|---|---|
-| `core` | lien, code (Damm), limiteur d'essais, messages, encodage | écrit, non compilé |
-| `noctiluca` | découverte par la DHT, endpoint iroh, trames, chemin utilisé | écrit, non compilé |
-| `auth` | SPAKE2 lié à la connexion, étiquettes de confirmation | écrit, non compilé |
-| `store` | manifeste, réception par blocs, journal de reprise, liste `b3sum` | écrit, non compilé |
-| `transfer` | service des fichiers, réception parallèle, accusé de réception | écrit, non compilé |
-| `cli` | binaire `lugus` (`send`, `receive`, `code`) | écrit, non compilé |
+- **Découverte** : l'émetteur publie ses adresses, signées par une clé éphémère, dans la DHT Mainline de BitTorrent. Aucun serveur à maintenir.
+- **Connexion** : QUIC (iroh), directe quand c'est possible (réseau local, IPv6, ports ouverts automatiquement en UPnP, PCP ou NAT-PMP, hole punching). Sinon, repli sur les relais publics d'iroh, où le trafic reste chiffré de bout en bout.
+- **Code** : `NNNN-mot-C`, 4 chiffres, un mot parmi 2048 et un chiffre de contrôle (algorithme de Damm). Les fautes de frappe sont détectées en local, sans consommer d'essai. 3 essais par lien, avec un délai croissant. Après 3 échecs, seul le code est régénéré.
+- **Authentification** : SPAKE2, liée aux clés des deux machines et à la session TLS. L'émetteur ne prouve qu'il connaît le code qu'après avoir vérifié la preuve du destinataire.
+- **Transfert** : blocs de 4 Mio, 4 fichiers en parallèle, proxys et fichiers annexes en premier. Reprise exacte après une coupure. L'émetteur reste en attente, et il suffit de relancer la réception.
+- **Vérification** : chaque fichier est relu sans cache, chaque bloc et le fichier entier sont comparés au BLAKE3 de la source. Le fichier reçoit ensuite la date d'origine et son nom définitif.
+- **À l'arrivée** : un MHL 1.1 en xxHash64 (`<nom>_lugus_<date>.mhl`, compatible avec Bandua MHL Companion, Silverstack, ShotPut…), et un accusé de réception authentifié envoyé à l'émetteur.
+- **Énergie** : la machine reste éveillée pendant toute la session.
+- **Mode Noctiluca** : réception programmée à une heure donnée, puis mise en veille ou extinction à la fin.
+- **Expiration** : le lien expire au bout de 24 h.
 
-## Transfert et intégrité
+## Application
 
-- Blocs de 4 Mio. L'émetteur calcule le BLAKE3 de chaque bloc et du fichier
-  entier pendant la lecture, et les envoie avec les données.
-- Le récepteur écrit dans `<fichier>.lugus-part` et note le hash de chaque bloc
-  dans `<fichier>.lugus-journal`. Après une coupure, il suffit de relancer
-  `lugus receive` avec le même lien et le même code : la réception reprend au
-  dernier bloc écrit. L'émetteur reste en attente pendant ce temps.
-- À la fin de chaque fichier, il est **relu depuis le disque** : chaque bloc et
-  le hash complet sont comparés à ceux de la source. Le fichier reçoit ensuite
-  la date de modification d'origine et prend son nom définitif.
-- Un fichier déjà présent à destination avec la bonne taille est hashé et
-  comparé à la source au lieu d'être téléchargé.
-- 4 fichiers en parallèle par défaut (`--parallel`), proxys et fichiers annexes
-  avant les originaux.
-- À la fin, `<nom>.lugus.b3` liste les hash (vérifiable avec `b3sum --check`).
-  Le récepteur envoie un accusé contenant l'empreinte de cette liste,
-  authentifié avec la clé de session.
-- Le MHL (ASC MHL) viendra plus tard : il n'accepte pas BLAKE3 et demandera un
-  hash xxHash en plus.
+L'interface (`ui/`) est en HTML/CSS/JS, sans npm, en français, anglais et espagnol. Ouverte dans un navigateur, elle tourne en mode démo avec des données simulées.
 
-## Règles du code d'accès
+## Ligne de commande
 
-- Format : `NNNN-mot-C` (4 chiffres, un mot de la liste, un chiffre de contrôle).
-- Chiffre de contrôle de Damm : toute erreur sur un chiffre et toute inversion
-  de deux chiffres voisins sont repérées en local, sans consommer d'essai.
-- 3 essais par lien, tous destinataires confondus, avec un délai croissant.
-  Chaque essai est réservé dès son début : abandonner en cours de route le
-  consomme quand même.
-- Après 3 échecs, seul le code est régénéré, le lien reste valable.
-
-## Authentification
-
-1. récepteur → `Hello`, puis `Pake` (SPAKE2, côté B)
-2. émetteur → `Pake` (côté A), après avoir réservé un essai
-3. récepteur → `Confirm` : sa preuve
-4. émetteur → `Confirm` s'il a vérifié la preuve, sinon `Error(WrongCode)`
-5. émetteur → `Manifest`, récepteur → `Select`
-6. un flux par fichier : `Request`, puis `Block` + données, puis `FileDone`
-7. récepteur → `Receipt`
-
-L'échange est lié à la connexion : identités SPAKE2 = clés iroh des deux pairs,
-et clé dérivée avec un secret exporté de la session TLS (RFC 5705).
-L'émetteur ne révèle sa preuve qu'après avoir vérifié celle du récepteur.
-
-## Connectivité
-
-- Découverte : DHT Mainline uniquement (`iroh-mainline-address-lookup`), aucun
-  serveur DNS iroh.link.
-- Ports : ouverture automatique par iroh (UPnP, PCP, NAT-PMP).
-- Hole punching : coordonné par les relais publics d'iroh, qui servent aussi de
-  repli. Le trafic y reste chiffré de bout en bout.
+```
+lugus send <fichier ou dossier> [--apres veille|extinction]
+lugus receive <lien> --code <code> --dest <dossier> [--depart 01:00] [--apres veille|extinction]
+lugus code [code à vérifier]
+```
 
 ## Développement
 
-Rust 1.91 au minimum (exigé par iroh 1.4).
-Pas de compilation automatique : le projet est compilé à la main, sur demande.
+Rust 1.91 au minimum (exigé par iroh 1.4). Pas de compilation automatique : le workflow GitHub `Compilation` se lance à la main (onglet Actions, puis Run workflow) et produit le CLI et l'application pour Windows et macOS (binaire universel).
 
 ```
-cargo build --release
+cargo test --workspace --exclude lugus-app
+cd src-tauri && cargo tauri dev
 ```
 
-Tests unitaires (sans réseau) : `cargo test`.
+Voir `CLAUDE.md` pour les règles de travail et l'organisation du code.
 
-Test de l'étape 3, sur deux machines :
+## Licence
 
-```
-lugus send <fichier ou dossier>                             # affiche le lien et le code
-lugus receive lugus://r/<clé> --code <code> --dest <dossier>  # reçoit et vérifie
-```
-
-Pour tester la reprise, interrompez `receive` (Ctrl+C) en cours de route, puis
-relancez la même commande.
-
-Pour tester la règle des essais, lancez `receive` avec un code valide mais
-différent (par exemple généré par `lugus code`).
+MIT. Voir `LICENSE`.

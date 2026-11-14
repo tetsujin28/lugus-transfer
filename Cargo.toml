@@ -7,6 +7,7 @@ members = [
     "crates/store",
     "crates/transfer",
     "crates/cli",
+    "src-tauri",
 ]
 
 [workspace.package]
@@ -15,21 +16,28 @@ edition = "2021"
 # iroh 1.4 exige Rust 1.91 au minimum.
 rust-version = "1.91"
 authors = ["Domingo Olmo Martin"]
+license = "MIT"
 repository = "https://github.com/tetsujin28/lugus-transfer"
 
 [workspace.dependencies]
 anyhow = "1"
+chrono = "0.4"
 clap = { version = "4", features = ["derive"] }
 postcard = { version = "1", default-features = false, features = ["alloc"] }
 # rand 0.8 : même famille rand_core 0.6 que spake2.
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
+serde_json = "1"
 thiserror = "2"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "fs", "io-util"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "fs", "io-util", "sync"] }
 
-# Cryptographie
+# Intégrité
 blake3 = "1"
 spake2 = { version = "0.4", features = ["std"] }
+xxhash-rust = { version = "0.8", features = ["xxh64"] }
+
+# Système
+keepawake = "0.6"
 
 # Réseau
 iroh = "1.4"
@@ -40,3 +48,9 @@ lugus-core = { path = "crates/core" }
 lugus-noctiluca = { path = "crates/noctiluca" }
 lugus-store = { path = "crates/store" }
 lugus-transfer = { path = "crates/transfer" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
