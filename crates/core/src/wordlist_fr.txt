@@ -1,0 +1,35 @@
+# Liste de mots du code d'accès (ASCII, minuscules, 4 à 8 lettres, faciles à dicter).
+# PROVISOIRE : 32 mots seulement. La liste finale doit contenir 2048 mots,
+# tous différents, sans accents, sans homophones proches ni mots qui se ressemblent.
+lanterne
+riviere
+falaise
+cheval
+sentier
+marais
+lumiere
+horizon
+cascade
+foret
+vallee
+rocher
+ruisseau
+bruyere
+chemin
+sommet
+bateau
+voyage
+plage
+nuage
+orage
+brume
+chene
+prairie
+colline
+source
+estuaire
+phare
+cairn
+lagune
+etoile
+ardoise

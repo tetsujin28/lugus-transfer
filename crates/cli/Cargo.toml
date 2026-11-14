@@ -1,0 +1,16 @@
+[package]
+name = "lugus-cli"
+description = "Binaire lugus : send, receive, code"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "lugus"
+path = "src/main.rs"
+
+[dependencies]
+anyhow = { workspace = true }
+clap = { workspace = true }
+lugus-core = { workspace = true }

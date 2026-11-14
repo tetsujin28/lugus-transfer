@@ -1,0 +1,25 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/core",
+    "crates/noctiluca",
+    "crates/auth",
+    "crates/store",
+    "crates/transfer",
+    "crates/cli",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+authors = ["Domingo Olmo Martin"]
+repository = "https://github.com/tetsujin28/lugus-transfer"
+
+[workspace.dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+
+lugus-core = { path = "crates/core" }

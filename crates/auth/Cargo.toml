@@ -1,0 +1,9 @@
+[package]
+name = "lugus-auth"
+description = "Authentification par code : SPAKE2 lié à l'identité de la connexion"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]

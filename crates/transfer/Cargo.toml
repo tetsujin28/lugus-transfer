@@ -1,0 +1,9 @@
+[package]
+name = "lugus-transfer"
+description = "Sessions d'envoi et de réception, ordonnanceur de blocs"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]

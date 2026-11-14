@@ -1,0 +1,12 @@
+[package]
+name = "lugus-core"
+description = "Cœur de Lugus Transfer : lien, code d'accès, protocole, états de session"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+rand = { workspace = true }
+serde = { workspace = true }
+thiserror = { workspace = true }

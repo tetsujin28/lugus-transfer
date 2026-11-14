@@ -1,0 +1,9 @@
+[package]
+name = "lugus-noctiluca"
+description = "Noctiluca : découverte des pairs (pkarr/DHT), iroh, boîte aux lettres, UPnP/PCP"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]

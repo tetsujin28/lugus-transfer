@@ -1,0 +1,9 @@
+[package]
+name = "lugus-store"
+description = "Fichiers et intégrité : BLAKE3, blocs, reprise, MHL"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
