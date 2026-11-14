@@ -1,0 +1,55 @@
+name: Compilation
+
+# Déclenchement manuel uniquement (bouton « Run workflow »), jamais à chaque push.
+on:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  tests:
+    name: Tests (Linux)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+
+  windows:
+    name: Windows
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+      - run: cargo build --release -p lugus-cli
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lugus-windows-x64
+          path: target/release/lugus.exe
+
+  macos:
+    name: macOS (universel)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace
+      - run: cargo build --release -p lugus-cli --target aarch64-apple-darwin
+      - run: cargo build --release -p lugus-cli --target x86_64-apple-darwin
+      - name: Binaire universel (Apple Silicon et Intel)
+        run: |
+          mkdir -p dist
+          lipo -create -output dist/lugus \
+            target/aarch64-apple-darwin/release/lugus \
+            target/x86_64-apple-darwin/release/lugus
+      - uses: actions/upload-artifact@v4
+        with:
+          name: lugus-macos-universel
+          path: dist/lugus
