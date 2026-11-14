@@ -1,6 +1,11 @@
 //! Règle des essais de code : 3 essais par lien, tous destinataires confondus,
 //! avec un délai croissant entre deux essais.
 //!
+//! Un essai est **réservé dès son début** (`begin`) et compté comme un échec.
+//! Il n'est rendu qu'en cas de succès (`succeed`). Ainsi, un attaquant qui
+//! abandonne la connexion au milieu de l'échange perd quand même son essai, et
+//! plusieurs connexions simultanées ne peuvent pas dépasser la limite.
+//!
 //! Le compteur vit côté émetteur. Le temps est passé en paramètre pour que la
 //! logique reste testable sans horloge réelle.
 
@@ -8,12 +13,12 @@ use std::time::{Duration, Instant};
 
 use crate::MAX_CODE_ATTEMPTS;
 
-/// Délai imposé après le 1er échec, puis après le 2e. Au-delà, on garde le dernier.
+/// Délai imposé après le 1er essai raté, puis après le 2e. Au-delà, on garde le dernier.
 const DELAYS_SECS: [u64; 2] = [2, 10];
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Verdict {
-    /// Un essai peut être tenté maintenant.
+    /// L'essai est accordé (et réservé, si obtenu par `begin`).
     Allowed,
     /// Il faut attendre avant le prochain essai.
     WaitFor(Duration),
@@ -25,7 +30,7 @@ pub enum Verdict {
 pub struct AttemptLimiter {
     max_failures: u32,
     failures: u32,
-    last_failure: Option<Instant>,
+    last_attempt: Option<Instant>,
 }
 
 impl Default for AttemptLimiter {
@@ -39,19 +44,17 @@ impl AttemptLimiter {
         Self {
             max_failures,
             failures: 0,
-            last_failure: None,
+            last_attempt: None,
         }
     }
 
-    /// Un essai est-il possible à l'instant `now` ?
+    /// Un essai serait-il accordé à l'instant `now` ? Ne réserve rien.
     pub fn check(&self, now: Instant) -> Verdict {
         if self.is_locked() {
             return Verdict::Locked;
         }
-        if let Some(last) = self.last_failure {
-            let index = (self.failures as usize)
-                .saturating_sub(1)
-                .min(DELAYS_SECS.len() - 1);
+        if let (Some(last), true) = (self.last_attempt, self.failures > 0) {
+            let index = (self.failures as usize - 1).min(DELAYS_SECS.len() - 1);
             let delay = Duration::from_secs(DELAYS_SECS[index]);
             let elapsed = now.saturating_duration_since(last);
             if elapsed < delay {
@@ -61,17 +64,29 @@ impl AttemptLimiter {
         Verdict::Allowed
     }
 
-    /// Enregistre un échec et renvoie le nombre d'essais restants.
-    pub fn record_failure(&mut self, now: Instant) -> u32 {
-        self.failures += 1;
-        self.last_failure = Some(now);
-        self.remaining()
+    /// Demande un essai. S'il est accordé, il est aussitôt compté comme un échec.
+    pub fn begin(&mut self, now: Instant) -> Verdict {
+        let verdict = self.check(now);
+        if verdict == Verdict::Allowed {
+            self.failures += 1;
+            self.last_attempt = Some(now);
+        }
+        verdict
+    }
+
+    /// L'essai en cours a réussi : il est rendu.
+    pub fn succeed(&mut self) {
+        self.failures = self.failures.saturating_sub(1);
+        if self.failures == 0 {
+            self.last_attempt = None;
+        }
     }
 
     pub fn failures(&self) -> u32 {
         self.failures
     }
 
+    /// Essais encore disponibles.
     pub fn remaining(&self) -> u32 {
         self.max_failures.saturating_sub(self.failures)
     }
@@ -83,7 +98,7 @@ impl AttemptLimiter {
     /// Nouveau code généré par l'émetteur : on repart de zéro, le lien reste le même.
     pub fn reset_for_new_code(&mut self) {
         self.failures = 0;
-        self.last_failure = None;
+        self.last_attempt = None;
     }
 }
 
@@ -99,24 +114,43 @@ mod tests {
     }
 
     #[test]
+    fn begin_reserves_an_attempt() {
+        let mut limiter = AttemptLimiter::default();
+        assert_eq!(limiter.begin(Instant::now()), Verdict::Allowed);
+        assert_eq!(limiter.remaining(), 2);
+    }
+
+    #[test]
+    fn success_gives_the_attempt_back() {
+        let mut limiter = AttemptLimiter::default();
+        let t0 = Instant::now();
+        limiter.begin(t0);
+        limiter.succeed();
+        assert_eq!(limiter.remaining(), 3);
+        assert_eq!(limiter.check(t0), Verdict::Allowed);
+    }
+
+    #[test]
     fn delay_after_first_failure() {
         let mut limiter = AttemptLimiter::default();
         let t0 = Instant::now();
-        assert_eq!(limiter.record_failure(t0), 2);
+        limiter.begin(t0);
         assert_eq!(
-            limiter.check(t0 + Duration::from_secs(1)),
+            limiter.begin(t0 + Duration::from_secs(1)),
             Verdict::WaitFor(Duration::from_secs(1))
         );
-        assert_eq!(limiter.check(t0 + Duration::from_secs(2)), Verdict::Allowed);
+        // Un refus pour délai ne consomme rien.
+        assert_eq!(limiter.remaining(), 2);
+        assert_eq!(limiter.begin(t0 + Duration::from_secs(2)), Verdict::Allowed);
     }
 
     #[test]
     fn longer_delay_after_second_failure() {
         let mut limiter = AttemptLimiter::default();
         let t0 = Instant::now();
-        limiter.record_failure(t0);
+        limiter.begin(t0);
         let t1 = t0 + Duration::from_secs(3);
-        assert_eq!(limiter.record_failure(t1), 1);
+        limiter.begin(t1);
         assert_eq!(
             limiter.check(t1 + Duration::from_secs(4)),
             Verdict::WaitFor(Duration::from_secs(6))
@@ -128,13 +162,29 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_attempts_cannot_exceed_the_limit() {
+        let mut limiter = AttemptLimiter::default();
+        let t0 = Instant::now();
+        let mut granted = 0;
+        for i in 0..10 {
+            if limiter.begin(t0 + Duration::from_secs(60 * i)) == Verdict::Allowed {
+                granted += 1;
+            }
+        }
+        assert_eq!(granted, 3);
+        assert!(limiter.is_locked());
+    }
+
+    #[test]
     fn locks_after_three_failures() {
         let mut limiter = AttemptLimiter::default();
         let t0 = Instant::now();
-        limiter.record_failure(t0);
-        limiter.record_failure(t0);
-        assert_eq!(limiter.record_failure(t0), 0);
-        assert!(limiter.is_locked());
+        for i in 0..3 {
+            assert_eq!(
+                limiter.begin(t0 + Duration::from_secs(60 * i)),
+                Verdict::Allowed
+            );
+        }
         assert_eq!(
             limiter.check(t0 + Duration::from_secs(3600)),
             Verdict::Locked
@@ -145,8 +195,8 @@ mod tests {
     fn new_code_unlocks_the_link() {
         let mut limiter = AttemptLimiter::default();
         let t0 = Instant::now();
-        for _ in 0..3 {
-            limiter.record_failure(t0);
+        for i in 0..3 {
+            limiter.begin(t0 + Duration::from_secs(60 * i));
         }
         limiter.reset_for_new_code();
         assert_eq!(limiter.failures(), 0);

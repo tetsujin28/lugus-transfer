@@ -1,9 +1,11 @@
 [package]
 name = "lugus-store"
-description = "Fichiers et intégrité : BLAKE3, blocs, reprise, MHL"
+description = "Fichiers et intégrité : manifeste, BLAKE3, blocs, reprise, MHL"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+lugus-core = { workspace = true }

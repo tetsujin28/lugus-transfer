@@ -3,7 +3,11 @@ name = "lugus-auth"
 description = "Authentification par code : SPAKE2 lié à l'identité de la connexion"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+blake3 = { workspace = true }
+spake2 = { workspace = true }
+thiserror = { workspace = true }

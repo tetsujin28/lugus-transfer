@@ -1,16 +1,19 @@
 //! Messages échangés entre l'émetteur et le récepteur (ALPN `lugus/1`).
 //!
-//! Ordre d'une session :
+//! Poignée de main, sur un flux bidirectionnel ouvert par le récepteur :
 //!
-//! 1. `Hello` : version du protocole
-//! 2. `Pake` : échange SPAKE2 (en cas d'échec, l'émetteur répond `Error`)
-//! 3. `Manifest` : l'émetteur décrit le contenu, uniquement après authentification
-//! 4. `Select` : le récepteur choisit les fichiers et l'ordre
-//! 5. transfert des blocs (prévu avec le crate `transfer`, pas encore défini ici)
-//! 6. `Receipt` : accusé de réception signé avec le hash final
+//! 1. récepteur → `Hello` : version du protocole
+//! 2. récepteur → `Pake` : son message SPAKE2 (rôle B)
+//! 3. émetteur → `Pake` : son message SPAKE2 (rôle A), ou `Error`
+//! 4. récepteur → `Confirm` : preuve qu'il connaît le code
+//! 5. émetteur → `Confirm` : sa propre preuve, ou `Error(WrongCode)`
+//! 6. émetteur → `Manifest` : le contenu, envoyé uniquement après authentification
+//! 7. récepteur → `Select` : fichiers choisis et ordre
+//! 8. transfert des blocs (crate `transfer`, pas encore défini ici)
+//! 9. récepteur → `Receipt` : accusé de réception signé avec le hash final
 //!
-//! Le format d'encodage sur le fil (postcard, bincode ou autre) reste à choisir.
-//! Les types dérivent `Serialize` et `Deserialize` pour ne pas figer ce choix.
+//! L'émetteur ne révèle sa preuve qu'après avoir vérifié celle du récepteur :
+//! un attaquant qui se trompe de code n'apprend rien.
 
 use serde::{Deserialize, Serialize};
 
@@ -21,6 +24,7 @@ pub type Hash = [u8; 32];
 pub enum Message {
     Hello { version: u8 },
     Pake { payload: Vec<u8> },
+    Confirm { tag: [u8; 32] },
     Manifest(Manifest),
     Select(Selection),
     Receipt(Receipt),
@@ -84,8 +88,14 @@ pub enum ProtocolError {
     WrongCode {
         remaining: u32,
     },
+    /// Trop tôt après un essai raté : réessayer dans `wait_secs` secondes.
+    TooSoon {
+        wait_secs: u64,
+    },
     /// Les essais sont épuisés, l'émetteur doit générer un nouveau code.
     CodeLocked,
+    /// Message inattendu ou mal formé.
+    BadMessage,
     LinkExpired,
     Busy,
 }

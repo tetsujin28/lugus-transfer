@@ -9,6 +9,7 @@ pub mod limiter;
 pub mod link;
 pub mod protocol;
 pub mod session;
+pub mod wire;
 
 /// Version du protocole, annoncée dans le message `Hello`.
 pub const PROTOCOL_VERSION: u8 = 1;

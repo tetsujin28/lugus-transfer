@@ -20,11 +20,13 @@ use std::net::IpAddr;
 
 use anyhow::{anyhow, Result};
 use iroh::address_lookup::AddrFilter;
-use iroh::endpoint::{presets, Connection};
+use iroh::endpoint::presets;
+pub use iroh::endpoint::{Connection, RecvStream, SendStream};
 use iroh::{Endpoint, PublicKey, RelayMode, SecretKey, TransportAddr};
 use iroh_mainline_address_lookup::DhtAddressLookup;
 use lugus_core::link::LugusLink;
-use lugus_core::ALPN;
+use lugus_core::protocol::Message;
+use lugus_core::{wire, ALPN};
 
 /// Convertit une erreur iroh ou QUIC en `anyhow::Error`, en gardant son message.
 ///
@@ -159,6 +161,51 @@ impl Beacon {
     pub async fn close(self) {
         self.endpoint.close().await;
     }
+}
+
+impl Beacon {
+    /// Clé publique de cet endpoint.
+    pub fn key(&self) -> [u8; 32] {
+        *self.endpoint.id().as_bytes()
+    }
+}
+
+/// Clé publique du pair, authentifiée par TLS.
+pub fn remote_key(conn: &Connection) -> [u8; 32] {
+    *conn.remote_id().as_bytes()
+}
+
+/// Secret de 32 octets propre à cette session TLS (RFC 5705), identique des
+/// deux côtés de la connexion. Sert à lier l'authentification à la connexion.
+pub fn channel_binding(conn: &Connection, label: &[u8]) -> Result<[u8; 32]> {
+    let mut out = [0u8; 32];
+    conn.export_keying_material(&mut out, label, b"")
+        .map_err(|e| anyhow!("export de clé TLS impossible : {e:?}"))?;
+    Ok(out)
+}
+
+/// Envoie un message sous forme de trame (longueur + postcard).
+pub async fn send_msg(stream: &mut SendStream, message: &Message) -> Result<()> {
+    let frame = wire::encode(message)?;
+    stream.write_all(&frame).await.map_err(net_err)
+}
+
+/// Taille maximale d'un message pendant la poignée de main, avant authentification.
+pub const HANDSHAKE_MAX_LEN: usize = 4096;
+
+/// Lit le prochain message tramé, en refusant les corps de plus de `max_len` octets.
+pub async fn recv_msg(stream: &mut RecvStream, max_len: usize) -> Result<Message> {
+    let mut header = [0u8; wire::HEADER_LEN];
+    stream.read_exact(&mut header).await.map_err(net_err)?;
+    let len = wire::body_len(header)?;
+    if len > max_len {
+        return Err(anyhow!(
+            "message trop long : {len} octets (maximum {max_len})"
+        ));
+    }
+    let mut body = vec![0u8; len];
+    stream.read_exact(&mut body).await.map_err(net_err)?;
+    Ok(wire::decode(&body)?)
 }
 
 /// Chemin actuellement sélectionné par la connexion.

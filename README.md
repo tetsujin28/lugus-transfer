@@ -11,24 +11,40 @@ côte tartessienne, donne son nom au module de découverte réseau.
 
 ## État
 
-Étape 1 : deux machines se trouvent par la DHT et échangent un message.
-Le code n'est pas encore vérifié par l'émetteur, et aucun fichier n'est transféré.
+Étape 2 : les deux machines se trouvent par la DHT, s'authentifient avec le
+code, puis l'émetteur envoie le manifeste et le récepteur sa sélection.
+Aucun fichier n'est encore transféré (étape 3).
 
 | Crate | Rôle | État |
 |---|---|---|
-| `core` | lien, code d'accès, limiteur d'essais, messages, états de session | écrit, non compilé |
+| `core` | lien, code (Damm), limiteur d'essais, messages, encodage | écrit, non compilé |
+| `noctiluca` | découverte par la DHT, endpoint iroh, trames, chemin utilisé | écrit, non compilé |
+| `auth` | SPAKE2 lié à la connexion, étiquettes de confirmation | écrit, non compilé |
+| `store` | manifeste (BLAKE3, blocs, reprise et MHL à venir) | en partie |
 | `cli` | binaire `lugus` (`send`, `receive`, `code`) | écrit, non compilé |
-| `noctiluca` | découverte par la DHT (pkarr), endpoint iroh, chemin utilisé | écrit, non compilé |
-| `auth` | SPAKE2 lié à l'identité de la connexion | à faire |
-| `store` | BLAKE3, blocs, reprise, MHL | à faire |
 | `transfer` | sessions et ordonnanceur de blocs | à faire |
 
 ## Règles du code d'accès
 
 - Format : `NNNN-mot-C` (4 chiffres, un mot de la liste, un chiffre de contrôle).
+- Chiffre de contrôle de Damm : toute erreur sur un chiffre et toute inversion
+  de deux chiffres voisins sont repérées en local, sans consommer d'essai.
 - 3 essais par lien, tous destinataires confondus, avec un délai croissant.
-- Le chiffre de contrôle et le mot sont vérifiés en local avant de consommer un essai.
+  Chaque essai est réservé dès son début : abandonner en cours de route le
+  consomme quand même.
 - Après 3 échecs, seul le code est régénéré, le lien reste valable.
+
+## Authentification
+
+1. récepteur → `Hello`, puis `Pake` (SPAKE2, côté B)
+2. émetteur → `Pake` (côté A), après avoir réservé un essai
+3. récepteur → `Confirm` : sa preuve
+4. émetteur → `Confirm` s'il a vérifié la preuve, sinon `Error(WrongCode)`
+5. émetteur → `Manifest`, récepteur → `Select`
+
+L'échange est lié à la connexion : identités SPAKE2 = clés iroh des deux pairs,
+et clé dérivée avec un secret exporté de la session TLS (RFC 5705).
+L'émetteur ne révèle sa preuve qu'après avoir vérifié celle du récepteur.
 
 ## Connectivité
 
@@ -47,9 +63,14 @@ Pas de compilation automatique : le projet est compilé à la main, sur demande.
 cargo build --release
 ```
 
-Test de l'étape 1, sur deux machines :
+Tests unitaires (sans réseau) : `cargo test`.
+
+Test de l'étape 2, sur deux machines :
 
 ```
-lugus send <fichier>                         # affiche le lien et le code
-lugus receive lugus://r/<clé> --code <code>  # trouve l'émetteur et échange un message
+lugus send <fichier ou dossier>              # affiche le lien, le code et le contenu
+lugus receive lugus://r/<clé> --code <code>  # s'authentifie et reçoit le manifeste
 ```
+
+Pour tester la règle des essais, lancez `receive` avec un code valide mais
+différent (par exemple généré par `lugus code`).
