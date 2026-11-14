@@ -15,8 +15,6 @@ use lugus_core::link::LugusLink;
 use lugus_transfer::session::{
     run_receiver, run_sender, Emit, Event, ReceiveOptions, SendOptions, SenderCommand,
 };
-use qrcode::render::svg;
-use qrcode::QrCode;
 use tauri::{AppHandle, Emitter, Manager, State};
 use tauri_plugin_dialog::DialogExt;
 use tauri_plugin_opener::OpenerExt;
@@ -97,18 +95,6 @@ fn check_link(link: String) -> Result<(), String> {
         .parse::<LugusLink>()
         .map(|_| ())
         .map_err(|e| e.to_string())
-}
-
-/// QR code du lien, en SVG, aux couleurs de l'interface.
-#[tauri::command]
-fn qr_svg(text: String) -> Result<String, String> {
-    let code = QrCode::new(text.as_bytes()).map_err(|e| e.to_string())?;
-    Ok(code
-        .render::<svg::Color>()
-        .min_dimensions(220, 220)
-        .dark_color(svg::Color("#e7e9ec"))
-        .light_color(svg::Color("#141619"))
-        .build())
 }
 
 fn emitter(app: &AppHandle) -> Emit {
@@ -223,7 +209,6 @@ fn main() {
             scan_path,
             check_code,
             check_link,
-            qr_svg,
             start_send,
             start_receive,
             new_code,

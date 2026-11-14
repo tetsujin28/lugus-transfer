@@ -59,7 +59,6 @@ function tauriBackend() {
     scan: (path) => invoke("scan_path", { path }),
     checkCode: (code) => invoke("check_code", { code }),
     checkLink: (link) => invoke("check_link", { link }),
-    qr: (text) => invoke("qr_svg", { text }),
     send: (options) => invoke("start_send", { options }),
     receive: (options) => invoke("start_receive", { options }),
     newCode: () => invoke("new_code"),
@@ -110,7 +109,6 @@ function demoBackend() {
     scan: async (path) => ({ path, name: path.split("/").pop(), files: path.endsWith(".braw") ? 1 : 214, bytes: path.endsWith(".braw") ? 4.2e9 : 6.2e11 }),
     checkCode: async (c) => { if (!/^\d{4}-[a-z]+-\d$/i.test(c.trim())) throw t("demo_code_shape"); return c.trim().toLowerCase(); },
     checkLink: async (l) => { if (!/^lugus:\/\/r\/[a-z0-9]{52}/.test(l.trim())) throw t("demo_link_shape"); },
-    qr: async () => '<svg viewBox="0 0 21 21" xmlns="http://www.w3.org/2000/svg"><rect width="21" height="21" fill="#141619"/><path d="M1 1h7v7H1zM13 1h7v7h-7zM1 13h7v7H1z" fill="none" stroke="#e7e9ec"/><path d="M10 10h2v2h-2zM14 14h2v2h-2zM17 11h2v2h-2z" fill="#e7e9ec"/></svg>',
     send: async (o) => {
       later(100, () => handler({ type: "preparing" }));
       later(700, () => handler({ type: "ready", link, code: code(), name: o.path.split("/").pop(), files: 214, bytes: 6.2e11, relay: true }));
@@ -336,7 +334,6 @@ async function showShare(link, code) {
   $("share").classList.remove("hidden");
   if (link) {
     $("shareLink").textContent = link;
-    try { $("qr").innerHTML = await api.qr(link); } catch { $("qr").innerHTML = ""; }
   }
   if (code) $("shareCode").textContent = code;
 }
