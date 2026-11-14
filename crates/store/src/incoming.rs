@@ -20,6 +20,7 @@
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, UNIX_EPOCH};
 
 use lugus_core::protocol::{FileEntry, Hash, BLOCK_SIZE};
@@ -196,14 +197,19 @@ impl Incoming {
 
     /// Relit le fichier depuis le disque (sans cache), le vérifie, le date et
     /// le renomme. En cas d'échec, le journal est effacé pour tout reprendre.
-    pub fn finish(mut self, sender_full_hash: Option<Hash>) -> io::Result<Verified> {
+    /// `progress` compte les octets relus, pour l'affichage.
+    pub fn finish(
+        mut self,
+        sender_full_hash: Option<Hash>,
+        progress: Option<&AtomicU64>,
+    ) -> io::Result<Verified> {
         if !self.is_complete() {
             return Err(invalid("fichier incomplet".to_string()));
         }
         self.part.flush()?;
         self.part.sync_all()?;
 
-        let result = verify(&self.part_path, self.size, Some(&self.hashes));
+        let result = verify(&self.part_path, self.size, Some(&self.hashes), progress);
         let verified = match result {
             Ok(verified) => verified,
             Err(err) => {
@@ -248,14 +254,19 @@ impl Incoming {
 }
 
 /// Hash d'un fichier déjà présent sur le disque (relu sans cache).
-pub fn hash_file(path: &Path) -> io::Result<Verified> {
+pub fn hash_file(path: &Path, progress: Option<&AtomicU64>) -> io::Result<Verified> {
     let size = fs::metadata(path)?.len();
-    verify(path, size, None).map_err(|err| with_path(err, path))
+    verify(path, size, None, progress).map_err(|err| with_path(err, path))
 }
 
 /// Relit `size` octets sans cache, calcule BLAKE3 et xxHash64 et, si
 /// `blocks` est fourni, compare chaque bloc de `BLOCK_SIZE` à son hash.
-fn verify(path: &Path, size: u64, blocks: Option<&[Hash]>) -> io::Result<Verified> {
+fn verify(
+    path: &Path,
+    size: u64,
+    blocks: Option<&[Hash]>,
+    progress: Option<&AtomicU64>,
+) -> io::Result<Verified> {
     let (mut reader, uncached) = rawio::open_uncached(path)?;
     let mut buffer = AlignedBuf::new(BLOCK_SIZE as usize);
     let mut full = blake3::Hasher::new();
@@ -267,6 +278,9 @@ fn verify(path: &Path, size: u64, blocks: Option<&[Hash]>) -> io::Result<Verifie
     let outcome = rawio::read_sized(&mut reader, size, &mut buffer, |chunk| {
         full.update(chunk);
         xxh.update(chunk);
+        if let Some(progress) = progress {
+            progress.fetch_add(chunk.len() as u64, Ordering::Relaxed);
+        }
         let Some(expected) = blocks else {
             return Ok(());
         };
@@ -415,9 +429,12 @@ mod tests {
         let entry = entry(data.len());
         let mut incoming = partial(&base, &entry);
         send_blocks(&mut incoming, &data, 0, 3);
+        let reread = AtomicU64::new(0);
         let verified = incoming
-            .finish(Some(*blake3::hash(&data).as_bytes()))
+            .finish(Some(*blake3::hash(&data).as_bytes()), Some(&reread))
             .unwrap();
+        // Le compteur de relecture couvre tout le fichier.
+        assert_eq!(reread.load(Ordering::Relaxed), data.len() as u64);
         let full = verified.blake3;
         let mut xxh = Xxh64::new(0);
         xxh.update(&data);
@@ -443,7 +460,7 @@ mod tests {
         let mut second = partial(&base, &entry);
         assert_eq!(second.offset(), BLOCK_SIZE);
         send_blocks(&mut second, &data, 1, 3);
-        second.finish(None).unwrap();
+        second.finish(None, None).unwrap();
         assert_eq!(fs::read(base.join("A001/clip.mov")).unwrap(), data);
         fs::remove_dir_all(&base).unwrap();
     }
@@ -486,7 +503,7 @@ mod tests {
         file.write_all(b"X").unwrap();
         drop(file);
 
-        assert!(incoming.finish(None).is_err());
+        assert!(incoming.finish(None, None).is_err());
         // Après un échec, la nouvelle tentative repart de zéro.
         let retry = partial(&base, &entry(data.len()));
         assert_eq!(retry.offset(), 0);
@@ -499,7 +516,7 @@ mod tests {
         let incoming = partial(&base, &entry(0));
         assert!(incoming.is_complete());
         let verified = incoming
-            .finish(Some(*blake3::hash(b"").as_bytes()))
+            .finish(Some(*blake3::hash(b"").as_bytes()), None)
             .unwrap();
         assert_eq!(verified.blake3, *blake3::hash(b"").as_bytes());
         // Valeur de référence de xxHash64 pour un fichier vide.

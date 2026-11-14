@@ -150,11 +150,19 @@ pub fn scan(path: &Path) -> io::Result<Manifest> {
 }
 
 /// Nom du contenu tel que le verra le destinataire : le nom du dossier ou du
-/// fichier, sans caractère interdit. Une racine de disque (`G:\` sous Windows,
-/// `/` ailleurs) n'a pas de nom : elle devient `Disque_G`.
+/// fichier, sans caractère interdit. Une racine de disque n'a pas de nom : on
+/// prend le nom du volume (sous Windows, celui affiché dans l'Explorateur ; sur
+/// Mac, une carte est montée sous `/Volumes/<nom>` et a donc déjà un nom), et à
+/// défaut `Disque_G`.
 pub fn content_name(path: &Path) -> String {
     if let Some(name) = path.file_name() {
         let clean = sanitize_name(&name.to_string_lossy());
+        if !clean.is_empty() {
+            return clean;
+        }
+    }
+    if let Some(label) = volume_label(path) {
+        let clean = sanitize_name(&label);
         if !clean.is_empty() {
             return clean;
         }
@@ -169,6 +177,49 @@ pub fn content_name(path: &Path) -> String {
     } else {
         format!("Disque_{letters}")
     }
+}
+
+/// Nom du volume dont `path` est la racine (Windows uniquement).
+#[cfg(windows)]
+fn volume_label(path: &Path) -> Option<String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::GetVolumeInformationW;
+
+    // La fonction attend une racine terminée par une barre oblique inverse : « G:\ ».
+    let backslash = u16::from(b'\\');
+    let mut root: Vec<u16> = path.as_os_str().encode_wide().collect();
+    if root.last() != Some(&backslash) {
+        root.push(backslash);
+    }
+    root.push(0);
+
+    let mut name = [0u16; 261];
+    // SAFETY : chaînes terminées par zéro, tampon de taille annoncée, pointeurs
+    // facultatifs nuls (autorisés par l'API).
+    let ok = unsafe {
+        GetVolumeInformationW(
+            root.as_ptr(),
+            name.as_mut_ptr(),
+            name.len() as u32,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if ok == 0 {
+        return None;
+    }
+    let len = name.iter().position(|&c| c == 0).unwrap_or(name.len());
+    let label = String::from_utf16_lossy(&name[..len]);
+    let label = label.trim();
+    (!label.is_empty()).then(|| label.to_string())
+}
+
+#[cfg(not(windows))]
+fn volume_label(_path: &Path) -> Option<String> {
+    None
 }
 
 /// Remplace les caractères interdits dans un nom de fichier (Windows compris)

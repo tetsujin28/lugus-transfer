@@ -59,19 +59,38 @@ impl Source {
     }
 }
 
+/// Avancement annoncé par le récepteur (messages `Status`).
+#[derive(Debug, Default)]
+pub struct PeerProgress {
+    pub received: AtomicU64,
+    pub verified: AtomicU64,
+}
+
 /// Sert les fichiers demandés jusqu'à la réception de l'accusé, qui est
-/// vérifié avec la clé de session. `sent` compte les octets envoyés.
+/// vérifié avec la clé de session. `sent` compte les octets envoyés, `peer`
+/// reçoit l'avancement annoncé par le récepteur.
 pub async fn serve(
     conn: Connection,
     source: Arc<Source>,
     mut control: RecvStream,
     session_key: [u8; 32],
     sent: Arc<AtomicU64>,
+    peer: Arc<PeerProgress>,
 ) -> Result<Receipt> {
-    // Lecture de l'accusé dans sa propre tâche : une lecture interrompue par
-    // `select!` perdrait des octets.
-    let mut receipt_task =
-        tokio::spawn(async move { recv_msg(&mut control, HANDSHAKE_MAX_LEN).await });
+    // Lecture du flux de contrôle dans sa propre tâche : une lecture interrompue
+    // par `select!` perdrait des octets. Les `Status` mettent `peer` à jour ;
+    // le premier autre message (l'accusé, normalement) termine la tâche.
+    let mut receipt_task = tokio::spawn(async move {
+        loop {
+            match recv_msg(&mut control, HANDSHAKE_MAX_LEN).await? {
+                Message::Status { received, verified } => {
+                    peer.received.store(received, Ordering::Relaxed);
+                    peer.verified.store(verified, Ordering::Relaxed);
+                }
+                other => return Ok::<Message, anyhow::Error>(other),
+            }
+        }
+    });
     let mut files = JoinSet::new();
 
     let message = loop {
@@ -211,6 +230,7 @@ pub async fn fetch(
     base: PathBuf,
     parallel: usize,
     received: Arc<AtomicU64>,
+    verified: Arc<AtomicU64>,
     on_done: OnFileDone,
 ) -> Result<Vec<Received>> {
     let queue = Arc::new(Mutex::new(VecDeque::from(order)));
@@ -224,10 +244,11 @@ pub async fn fetch(
         let results = results.clone();
         let base = base.clone();
         let received = received.clone();
+        let verified = verified.clone();
         let on_done = on_done.clone();
         workers.spawn(async move {
             while let Some(index) = next_job(&queue) {
-                let done = fetch_file(&conn, &manifest, index, &base, &received).await?;
+                let done = fetch_file(&conn, &manifest, index, &base, &received, &verified).await?;
                 on_done(&done);
                 results.lock().expect("verrou empoisonné").push(done);
             }
@@ -254,6 +275,7 @@ async fn fetch_file(
     index: u32,
     base: &Path,
     received: &AtomicU64,
+    verified: &Arc<AtomicU64>,
 ) -> Result<Received> {
     let entry = manifest
         .files
@@ -279,7 +301,8 @@ async fn fetch_file(
             send_msg(&mut send, &request).await?;
             send.finish().map_err(net_err)?;
             let source_hash = expect_done(&mut recv, &entry.path).await?;
-            let local = spawn_blocking(move || hash_file(&path)).await??;
+            let reread = verified.clone();
+            let local = spawn_blocking(move || hash_file(&path, Some(&reread))).await??;
             if source_hash != Some(local.blake3) {
                 bail!(
                     "{} existe déjà à destination mais diffère de la source",
@@ -324,13 +347,15 @@ async fn fetch_file(
                         received.fetch_add(u64::from(len), Ordering::Relaxed);
                     }
                     Message::FileDone { full_hash } => {
-                        let verified = spawn_blocking(move || incoming.finish(full_hash))
-                            .await?
-                            .with_context(|| format!("vérification de {}", entry.path))?;
+                        let reread = verified.clone();
+                        let result =
+                            spawn_blocking(move || incoming.finish(full_hash, Some(&reread)))
+                                .await?
+                                .with_context(|| format!("vérification de {}", entry.path))?;
                         return Ok(Received {
                             index,
                             path: entry.path,
-                            verified,
+                            verified: result,
                         });
                     }
                     Message::Error(error) => {

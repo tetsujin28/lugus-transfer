@@ -13,7 +13,7 @@
 //! mettre en veille ou l'éteindre à la fin.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::power::{self, Awake, EndAction};
-use crate::{Received, Source, DEFAULT_PARALLEL_FILES};
+use crate::{PeerProgress, Received, Source, DEFAULT_PARALLEL_FILES};
 
 /// Délai maximal pour trouver l'émetteur dans la DHT et s'y connecter.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(90);
@@ -45,6 +45,10 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 const LINGER: Duration = Duration::from_secs(5);
 /// Intervalle des événements de progression.
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(500);
+/// Intervalle des messages `Status` du récepteur vers l'émetteur.
+const STATUS_INTERVAL: Duration = Duration::from_secs(1);
+/// Délai maximal pour confirmer la publication du lien dans la DHT.
+const PUBLISH_CHECK_TIMEOUT: Duration = Duration::from_secs(90);
 
 /// Nom de l'outil inscrit dans les MHL.
 pub const TOOL_NAME: &str = concat!(
@@ -58,7 +62,9 @@ pub const TOOL_NAME: &str = concat!(
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum Event {
     // --- Émetteur
-    /// Lien publié, en attente du destinataire.
+    /// Analyse des fichiers à envoyer.
+    Preparing,
+    /// Lien créé et en cours de publication, en attente du destinataire.
     Ready {
         link: String,
         code: String,
@@ -68,6 +74,12 @@ pub enum Event {
         /// `false` si aucun relais n'a pu être joint : connexions directes seulement.
         relay: bool,
     },
+    /// Le lien a été retrouvé dans la DHT : le destinataire peut le joindre.
+    Published {
+        seconds: f32,
+    },
+    /// Le lien n'a pas encore été retrouvé dans la DHT après 90 s.
+    PublishSlow,
     NewCode {
         code: String,
     },
@@ -135,9 +147,18 @@ pub enum Event {
         path: String,
     },
 
+    /// Toutes les données sont reçues et vérifiées ; étape finale en cours :
+    /// `mhl` (écriture du MHL) ou `receipt` (envoi de l'accusé).
+    Finalizing {
+        step: String,
+    },
+
     // --- Commun
+    /// `done` : octets envoyés ou reçus ; `verified` : octets relus et vérifiés
+    /// sur le disque du destinataire.
     Progress {
         done: u64,
+        verified: u64,
         total: u64,
         path: String,
     },
@@ -194,7 +215,10 @@ pub async fn run_sender(
     emit: Emit,
     mut commands: mpsc::UnboundedReceiver<SenderCommand>,
 ) -> Result<()> {
-    let source = Source::new(&options.path)
+    emit(Event::Preparing);
+    let path = options.path.clone();
+    let source = tokio::task::spawn_blocking(move || Source::new(&path))
+        .await?
         .with_context(|| format!("lecture de {} impossible", options.path.display()))?;
     if source.manifest().files.is_empty() {
         bail!("aucun fichier à envoyer dans {}", options.path.display());
@@ -217,6 +241,20 @@ pub async fn run_sender(
         files: manifest.files.len(),
         bytes: manifest.total_bytes(),
         relay,
+    });
+    // Annulée automatiquement à la fin de la session.
+    let _publish_check = AbortOnDrop({
+        let emit = emit.clone();
+        let key = beacon.key();
+        tokio::spawn(async move {
+            let started = Instant::now();
+            match lugus_noctiluca::wait_until_published(key, PUBLISH_CHECK_TIMEOUT).await {
+                Ok(true) => emit(Event::Published {
+                    seconds: started.elapsed().as_secs_f32(),
+                }),
+                _ => emit(Event::PublishSlow),
+            }
+        })
     });
 
     let deadline = tokio::time::Instant::now() + Duration::from_secs(DEFAULT_LINK_TTL_SECS);
@@ -445,18 +483,36 @@ async fn deliver(
     });
 
     let sent = Arc::new(AtomicU64::new(0));
-    let ticker = spawn_progress(emit.clone(), sent.clone(), total, conn.clone());
+    let peer = Arc::new(PeerProgress::default());
+    let read: Counters = {
+        let sent = sent.clone();
+        let peer = peer.clone();
+        Arc::new(move || {
+            (
+                sent.load(Ordering::Relaxed),
+                peer.verified.load(Ordering::Relaxed),
+            )
+        })
+    };
+    let ticker = spawn_progress(emit.clone(), read.clone(), total, conn.clone());
     let result = crate::serve(
         conn.clone(),
         source.clone(),
         recv,
         session_key,
         sent.clone(),
+        peer.clone(),
     )
     .await;
     ticker.abort();
     let receipt = result?;
-    emit_progress(emit, &sent, total, conn);
+    // L'accusé prouve que tout a été vérifié chez le destinataire.
+    emit(Event::Progress {
+        done: total,
+        verified: total,
+        total,
+        path: current_path(conn).code().to_string(),
+    });
 
     emit(Event::Delivered {
         files: receipt.file_count,
@@ -582,7 +638,42 @@ pub async fn run_receiver(options: ReceiveOptions, emit: Emit) -> Result<()> {
     let transfer_started = Instant::now();
     let mhl_started = chrono::Local::now();
     let received = Arc::new(AtomicU64::new(0));
-    let ticker = spawn_progress(emit.clone(), received.clone(), total, conn.clone());
+    let verified = Arc::new(AtomicU64::new(0));
+    let read: Counters = {
+        let received = received.clone();
+        let verified = verified.clone();
+        Arc::new(move || {
+            (
+                received.load(Ordering::Relaxed),
+                verified.load(Ordering::Relaxed),
+            )
+        })
+    };
+    let ticker = spawn_progress(emit.clone(), read.clone(), total, conn.clone());
+
+    // Le flux de contrôle est partagé : `Status` régulier vers l'émetteur, puis
+    // l'accusé. La tâche s'arrête d'elle-même (jamais en plein message).
+    let control = Arc::new(tokio::sync::Mutex::new(send));
+    let status_stop = Arc::new(AtomicBool::new(false));
+    let status_task = {
+        let control = control.clone();
+        let read = read.clone();
+        let stop = status_stop.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(STATUS_INTERVAL).await;
+                if stop.load(Ordering::Relaxed) {
+                    break;
+                }
+                let (received, verified) = read();
+                let message = Message::Status { received, verified };
+                let mut send = control.lock().await;
+                if send_msg(&mut send, &message).await.is_err() {
+                    break;
+                }
+            }
+        })
+    };
     let on_done: crate::OnFileDone = {
         let emit = emit.clone();
         let manifest = Arc::new(manifest.clone());
@@ -606,14 +697,20 @@ pub async fn run_receiver(options: ReceiveOptions, emit: Emit) -> Result<()> {
         layout.base.clone(),
         options.parallel,
         received.clone(),
+        verified.clone(),
         on_done,
     )
     .await;
     ticker.abort();
+    status_stop.store(true, Ordering::Relaxed);
+    let _ = status_task.await;
     let results = result?;
-    emit_progress(&emit, &received, total, &conn);
+    emit_progress(&emit, &read, total, &conn);
 
     // MHL 1.1 (xxHash64) dans le dossier reçu.
+    emit(Event::Finalizing {
+        step: "mhl".to_string(),
+    });
     let finished = chrono::Local::now();
     let entries: Vec<MhlEntry> = results
         .iter()
@@ -645,8 +742,14 @@ pub async fn run_receiver(options: ReceiveOptions, emit: Emit) -> Result<()> {
         .collect();
     let (_, list_digest) = lugus_store::hash_list(&blake_list);
     let receipt = crate::make_receipt(results.len() as u32, total, list_digest, session.key());
-    send_msg(&mut send, &Message::Receipt(receipt)).await?;
-    send.finish().map_err(net_err)?;
+    emit(Event::Finalizing {
+        step: "receipt".to_string(),
+    });
+    {
+        let mut send = control.lock().await;
+        send_msg(&mut send, &Message::Receipt(receipt)).await?;
+        send.finish().map_err(net_err)?;
+    }
 
     emit(Event::Received {
         files: results.len(),
@@ -709,9 +812,21 @@ pub fn describe(error: &ProtocolError) -> String {
 // Commun
 // ---------------------------------------------------------------------------
 
+/// Annule une tâche de fond quand il est détruit.
+struct AbortOnDrop(tokio::task::JoinHandle<()>);
+
+impl Drop for AbortOnDrop {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Lit les compteurs (octets transférés, octets vérifiés).
+type Counters = Arc<dyn Fn() -> (u64, u64) + Send + Sync>;
+
 fn spawn_progress(
     emit: Emit,
-    counter: Arc<AtomicU64>,
+    read: Counters,
     total: u64,
     conn: Connection,
 ) -> tokio::task::JoinHandle<()> {
@@ -719,14 +834,16 @@ fn spawn_progress(
         let mut interval = tokio::time::interval(PROGRESS_INTERVAL);
         loop {
             interval.tick().await;
-            emit_progress(&emit, &counter, total, &conn);
+            emit_progress(&emit, &read, total, &conn);
         }
     })
 }
 
-fn emit_progress(emit: &Emit, counter: &AtomicU64, total: u64, conn: &Connection) {
+fn emit_progress(emit: &Emit, read: &Counters, total: u64, conn: &Connection) {
+    let (done, verified) = read();
     emit(Event::Progress {
-        done: counter.load(Ordering::Relaxed),
+        done,
+        verified,
         total,
         path: current_path(conn).code().to_string(),
     });

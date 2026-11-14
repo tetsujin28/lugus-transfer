@@ -117,7 +117,8 @@ async fn main() -> Result<()> {
 /// blocage du code côté émetteur.
 fn printer(commands: Option<mpsc::UnboundedSender<SenderCommand>>) -> Emit {
     let first_progress: Mutex<Option<(Instant, u64)>> = Mutex::new(None);
-    Arc::new(move |event: Event| match event {
+    Arc::new(move |event: Event| {
+        match event {
         Event::Ready {
             link,
             code,
@@ -134,8 +135,16 @@ fn printer(commands: Option<mpsc::UnboundedSender<SenderCommand>>) -> Emit {
             if !relay {
                 eprintln!("Attention : aucun relais joignable, connexions directes seulement.");
             }
+            eprintln!("Publication du lien dans la DHT…");
             eprintln!("En attente du destinataire, Ctrl+C pour arrêter.");
         }
+        Event::Preparing => eprintln!("Analyse des fichiers à envoyer…"),
+        Event::Published { seconds } => eprintln!(
+            "Lien en ligne : retrouvé dans la DHT en {seconds:.0} s, le destinataire peut l'utiliser."
+        ),
+        Event::PublishSlow => eprintln!(
+            "Le lien n'est pas encore visible dans la DHT. Il peut fonctionner quand même, laisse Lugus ouvert."
+        ),
         Event::NewCode { code } => println!("Nouveau code : {code}"),
         Event::Incoming { path } => eprintln!("Connexion entrante ({})", path_label(&path)),
         Event::WrongCode { remaining } => {
@@ -223,7 +232,19 @@ fn printer(commands: Option<mpsc::UnboundedSender<SenderCommand>>) -> Emit {
             );
             eprintln!("MHL : {mhl}");
         }
-        Event::Progress { done, total, path } => {
+        Event::Finalizing { step } => {
+            eprintln!();
+            match step.as_str() {
+                "mhl" => eprintln!("Tous les fichiers sont vérifiés. Écriture du MHL…"),
+                _ => eprintln!("Envoi de l'accusé de réception à l'expéditeur…"),
+            }
+        }
+        Event::Progress {
+            done,
+            verified,
+            total,
+            path,
+        } => {
             let mut first = first_progress.lock().expect("verrou empoisonné");
             let (since, base) = *first.get_or_insert((Instant::now(), done));
             let elapsed = since.elapsed().as_secs_f64().max(0.001);
@@ -233,8 +254,13 @@ fn printer(commands: Option<mpsc::UnboundedSender<SenderCommand>>) -> Emit {
             } else {
                 done as f64 * 100.0 / total as f64
             };
+            let checked = if total == 0 {
+                100.0
+            } else {
+                verified as f64 * 100.0 / total as f64
+            };
             eprint!(
-                "\r{} / {} ({percent:.0} %), {}/s, {}     ",
+                "\r{} / {} ({percent:.0} %), {}/s, vérifié {checked:.0} %, {}     ",
                 human(done),
                 human(total),
                 human(rate as u64),
@@ -244,6 +270,7 @@ fn printer(commands: Option<mpsc::UnboundedSender<SenderCommand>>) -> Emit {
         }
         Event::EndAction { action } => eprintln!("Action de fin : {action:?}"),
         Event::Error { message } => eprintln!("Erreur : {message}"),
+    }
     })
 }
 

@@ -31,6 +31,7 @@ const fmtTime = (s) => {
   const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), r = s % 60;
   return h ? `${h}h${String(m).padStart(2, "0")}` : `${m}:${String(r).padStart(2, "0")}`;
 };
+const pctOf = (a, b) => (b ? Math.min(100, Math.floor((a * 100) / b)) : 100);
 const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 const pathLabel = (p) => t("path_" + (["local", "direct", "relay"].includes(p) ? p : "unknown"));
 
@@ -40,7 +41,9 @@ function applyLang() {
   document.querySelectorAll("[data-i18n-ph]").forEach((el) => (el.placeholder = t(el.dataset.i18nPh)));
   document.querySelectorAll("[data-i18n-title]").forEach((el) => (el.title = t(el.dataset.i18nTitle)));
   document.querySelectorAll("#lang button").forEach((b) => b.classList.toggle("on", b.dataset.l === LANG));
-  renderDrop(); renderDest(); renderGo(); renderIdle(); checkInputs(); S.modalFn?.();
+  renderDrop(); renderDest(); renderGo(); renderIdle(); renderSteps(); renderPhase(); renderPub(); checkInputs();
+  $("vLabel").textContent = t(S.mode === "send" ? "verified_remote" : "verified_local");
+  S.modalFn?.();
 }
 function setLang(l) { LANG = l; store.set("lang", l); applyLang(); }
 
@@ -84,15 +87,18 @@ function demoBackend() {
   const words = ["lanterne", "riviere", "falaise", "cheval", "sentier"];
   const code = () => `${String(Math.floor(Math.random() * 10000)).padStart(4, "0")}-${words[Math.floor(Math.random() * words.length)]}-${Math.floor(Math.random() * 10)}`;
   const link = "lugus://r/ng6bfcmwftaipe1e6x8tpdnhp5ijxqcixciyurigwfs3hg9ng58o?v=1";
+  // Transfert simulé, puis vérification qui continue après 100 %.
   const run = (total, files, done) => {
-    let sent = 0, i = 0;
+    let moved = 0, checked = 0, i = 0;
     const tick = setInterval(() => {
-      sent = Math.min(total, sent + total / 40);
-      handler({ type: "progress", done: Math.round(sent), total, path: "direct" });
-      if (files && sent / total > (i + 1) / files.length && i < files.length) {
+      moved = Math.min(total, moved + total / 30);
+      const cap = moved >= total ? total : moved * 0.8;
+      checked = Math.min(cap, checked + (moved >= total ? total / 12 : total / 34));
+      handler({ type: "progress", done: Math.round(moved), verified: Math.round(checked), total, path: "direct" });
+      if (files && checked / total > (i + 1) / files.length && i < files.length) {
         handler({ type: "file_verified", path: files[i], size: Math.round(total / files.length), uncached: true }); i++;
       }
-      if (sent >= total) { clearInterval(tick); done(); }
+      if (checked >= total) { clearInterval(tick); done(); }
     }, 150);
     timers.push(tick);
   };
@@ -106,20 +112,27 @@ function demoBackend() {
     checkLink: async (l) => { if (!/^lugus:\/\/r\/[a-z0-9]{52}/.test(l.trim())) throw t("demo_link_shape"); },
     qr: async () => '<svg viewBox="0 0 21 21" xmlns="http://www.w3.org/2000/svg"><rect width="21" height="21" fill="#141619"/><path d="M1 1h7v7H1zM13 1h7v7h-7zM1 13h7v7H1z" fill="none" stroke="#e7e9ec"/><path d="M10 10h2v2h-2zM14 14h2v2h-2zM17 11h2v2h-2z" fill="#e7e9ec"/></svg>',
     send: async (o) => {
-      later(600, () => handler({ type: "ready", link, code: code(), name: o.path.split("/").pop(), files: 214, bytes: 6.2e11, relay: true }));
-      later(3000, () => handler({ type: "incoming", path: "direct" }));
-      later(3600, () => handler({ type: "wrong_code", remaining: 2 }));
-      later(6000, () => handler({ type: "incoming", path: "direct" }));
-      later(6500, () => handler({ type: "authenticated", path: "direct" }));
-      later(7000, () => { handler({ type: "selected", files: 214, bytes: 6.2e11 }); run(6.2e11, null, () => handler({ type: "delivered", files: 214, bytes: 6.2e11, receipt: "3f9a1c0e7b52d4a8", path: "direct" })); });
+      later(100, () => handler({ type: "preparing" }));
+      later(700, () => handler({ type: "ready", link, code: code(), name: o.path.split("/").pop(), files: 214, bytes: 6.2e11, relay: true }));
+      later(2600, () => handler({ type: "published", seconds: 1.9 }));
+      later(4200, () => handler({ type: "incoming", path: "direct" }));
+      later(4700, () => handler({ type: "wrong_code", remaining: 2 }));
+      later(6500, () => handler({ type: "incoming", path: "direct" }));
+      later(7000, () => handler({ type: "authenticated", path: "direct" }));
+      later(7400, () => { handler({ type: "selected", files: 214, bytes: 6.2e11 }); run(6.2e11, null, () => handler({ type: "delivered", files: 214, bytes: 6.2e11, receipt: "3f9a1c0e7b52d4a8", path: "direct" })); });
     },
     receive: async (o) => {
-      if (o.start_at) { handler({ type: "waiting", until: o.start_at, seconds: 3 }); }
-      later(o.start_at ? 3000 : 300, () => handler({ type: "searching" }));
-      later(o.start_at ? 4500 : 1800, () => handler({ type: "found", seconds: 1.5, path: "direct" }));
-      later(o.start_at ? 5200 : 2500, () => {
+      const d = o.start_at ? 3000 : 0;
+      if (o.start_at) handler({ type: "waiting", until: o.start_at, seconds: 180 });
+      later(d + 300, () => handler({ type: "searching" }));
+      later(d + 1800, () => handler({ type: "found", seconds: 1.5, path: "direct" }));
+      later(d + 2500, () => {
         handler({ type: "manifest", name: "J04", files: demoFiles.length, bytes: 2.1e10, originals: 2, proxies: 2, sidecars: 1 });
-        run(2.1e10, demoFiles, () => handler({ type: "received", files: demoFiles.length, bytes: 2.1e10, seconds: 412, mhl: "/Reception/J04/J04_lugus_2026-11-14_221500.mhl", folder: "/Reception/J04", path: "direct" }));
+        run(2.1e10, demoFiles, () => {
+          handler({ type: "finalizing", step: "mhl" });
+          later(900, () => handler({ type: "finalizing", step: "receipt" }));
+          later(1600, () => handler({ type: "received", files: demoFiles.length, bytes: 2.1e10, seconds: 412, mhl: "/Reception/J04/J04_lugus_2026-11-14_221500.mhl", folder: "/Reception/J04", path: "direct" }));
+        });
       });
     },
     newCode: async () => later(200, () => handler({ type: "new_code", code: code() })),
@@ -142,8 +155,16 @@ const S = {
   dest: store.get("dest", null),
   linkOk: false, codeOk: false,
   total: 0, startT: 0, samples: [],
+  steps: [], stepIdx: -1, final: null, // final : "ok" | "bad" | null
+  phase: null,                        // { key, vars, sub, kind }
+  pub: null,                          // "pending" | "online" | "slow" | null
   result: null,                       // { folder, mhl }
   modalFn: null,
+};
+
+const STEPS = {
+  send: ["prepare", "publish", "wait", "code", "transfer", "verify_remote", "done"],
+  recv: ["search", "code", "transfer", "verify", "mhl", "done"],
 };
 
 function setChip(kind, key) {
@@ -161,6 +182,50 @@ function setMode(mode) {
   $("recvForm").classList.toggle("hidden", mode !== "recv");
   resetRight();
   renderGo();
+}
+
+// ------------------------------------------------------------------ Étapes et phrase d'état
+
+function buildSteps(night) {
+  S.steps = S.mode === "send" ? STEPS.send : night ? ["night", ...STEPS.recv] : STEPS.recv;
+  S.stepIdx = -1; S.final = null;
+  renderSteps();
+}
+
+// N'avance que vers l'avant : un événement tardif ne fait pas reculer la frise.
+function step(key) {
+  const i = S.steps.indexOf(key);
+  if (i > S.stepIdx) { S.stepIdx = i; renderSteps(); }
+}
+
+function renderSteps() {
+  $("steps").innerHTML = S.steps.map((k, i) => {
+    let cls = "", mark = String(i + 1);
+    if (i < S.stepIdx) { cls = "done"; mark = "✓"; }
+    else if (i === S.stepIdx) {
+      cls = S.final === "ok" ? "ok" : S.final === "bad" ? "bad" : "active";
+      mark = S.final === "ok" ? "✓" : S.final === "bad" ? "✕" : mark;
+    }
+    return `<div class="step ${cls}"><i>${mark}</i>${esc(t("step_" + k))}</div>`;
+  }).join("");
+}
+
+function phase(key, vars, sub, kind) { S.phase = { key, vars, sub, kind }; renderPhase(); }
+function renderPhase() {
+  const p = S.phase;
+  if (!p) return;
+  $("phase").className = "phase" + (p.kind ? " " + p.kind : "");
+  $("phaseText").textContent = t(p.key, p.vars);
+  $("phaseSub").textContent = p.sub ? (p.sub.raw ?? t(p.sub.key, p.sub.vars)) : "";
+}
+
+function setPub(state) { S.pub = state; renderPub(); }
+function renderPub() {
+  const b = $("pub");
+  b.classList.toggle("hidden", !S.pub);
+  if (!S.pub) return;
+  b.className = "pub " + S.pub;
+  b.textContent = t("pub_" + S.pub);
 }
 
 // ------------------------------------------------------------------ Formulaires
@@ -214,8 +279,7 @@ function checkInputs() {
 function hint(id, text, kind) { const h = $(id); h.textContent = text; h.className = "hint" + (kind ? " " + kind : ""); }
 
 function renderNight() {
-  const on = $("nightOn").checked;
-  $("night").classList.toggle("on", on);
+  $("night").classList.toggle("on", $("nightOn").checked);
 }
 
 function renderGo() {
@@ -240,18 +304,21 @@ function renderIdle() {
 }
 
 function resetRight() {
-  ["share", "banner", "prog", "cols"].forEach((id) => $(id).classList.add("hidden"));
+  ["status", "share", "banner", "prog", "cols"].forEach((id) => $(id).classList.add("hidden"));
   $("idle").classList.remove("hidden");
   $("log").innerHTML = ""; $("files").innerHTML = "";
   $("prog").classList.remove("done");
   $("share").classList.remove("locked");
-  S.total = 0; S.samples = []; S.result = null;
-  renderIdle();
+  S.total = 0; S.samples = []; S.result = null; S.phase = null; S.pub = null;
+  S.steps = []; S.stepIdx = -1; S.final = null;
+  renderIdle(); renderSteps(); renderPub();
+  $("vLabel").textContent = t(S.mode === "send" ? "verified_remote" : "verified_local");
   setChip("", "ready");
 }
 
 function showWork() {
   $("idle").classList.add("hidden");
+  $("status").classList.remove("hidden");
   $("cols").classList.remove("hidden");
   $("files").classList.toggle("hidden", S.mode !== "recv");
   $("cols").style.gridTemplateColumns = S.mode === "recv" ? "1fr 1fr" : "1fr";
@@ -277,24 +344,44 @@ async function showShare(link, code) {
 function startProgress(total) {
   S.total = total; S.startT = Date.now(); S.samples = [];
   $("prog").classList.remove("hidden", "done");
-  progress({ done: 0, total, path: "unknown" });
+  progress({ done: 0, verified: 0, total, path: "unknown" });
 }
 
 function progress(e) {
   const now = Date.now();
+  const verified = e.verified ?? 0;
   S.samples.push([now, e.done]);
   while (S.samples.length > 2 && now - S.samples[0][0] > 6000) S.samples.shift();
   const [t0, d0] = S.samples[0];
   const rate = now > t0 ? ((e.done - d0) * 1000) / (now - t0) : 0;
-  const pct = e.total ? (e.done * 100) / e.total : 100;
-  // Jamais « 100 % » avant la fin réelle : la vérification du dernier fichier peut prendre du temps.
-  $("pct").textContent = num(e.done < e.total ? Math.min(99, Math.floor(pct)) : 100) + " %";
+  const moved = pctOf(e.done, e.total), checked = pctOf(verified, e.total);
+  const allMoved = e.done >= e.total;
+
+  $("pct").textContent = num(moved) + " %";
   $("amount").textContent = `${fmtBytes(e.done)} / ${fmtBytes(e.total)}`;
-  $("bar").style.width = pct.toFixed(2) + "%";
-  $("speed").textContent = rate > 0 ? fmtBytes(rate) + "/s" : "-";
-  $("eta").textContent = rate > 0 ? fmtTime((e.total - e.done) / rate) : "-";
+  $("bar").style.width = moved + "%";
+  $("vbar").style.width = checked + "%";
+  $("vpct").textContent = num(checked) + " %";
+  $("speed").textContent = !allMoved && rate > 0 ? fmtBytes(rate) + "/s" : "-";
+  $("eta").textContent = !allMoved && rate > 0 ? fmtTime((e.total - e.done) / rate) : "-";
   $("elapsed").textContent = fmtTime((now - S.startT) / 1000);
   $("route").textContent = pathLabel(e.path);
+
+  // Phrase d'état pendant le transfert et la vérification.
+  if (!S.running || S.final) return;
+  if (S.mode === "send") {
+    if (allMoved) {
+      step("verify_remote");
+      phase("ph_remote_verify", { p: num(checked) }, { key: "ph_remote_verify_sub" });
+    } else {
+      phase("ph_sending", { p: num(moved) }, { key: "ph_sending_sub", vars: { v: num(checked) } });
+    }
+  } else if (allMoved && verified < e.total) {
+    step("verify");
+    phase("ph_local_verify", { p: num(checked) }, { key: "ph_local_verify_sub" });
+  } else if (!allMoved) {
+    phase("ph_receiving", { p: num(moved) }, { key: "ph_receiving_sub", vars: { v: num(checked) } });
+  }
 }
 
 function addFile(e) {
@@ -311,8 +398,14 @@ function banner(ok, title, sub, actions) {
 
 function finish(ok, title, sub, actions) {
   S.running = false;
+  if (ok) step("done");
+  S.final = ok ? "ok" : "bad";
+  renderSteps();
   banner(ok, title, sub, actions);
-  if (ok) { $("prog").classList.add("done"); $("bar").style.width = "100%"; }
+  if (ok) {
+    $("prog").classList.add("done");
+    $("bar").style.width = "100%"; $("vbar").style.width = "100%"; $("vpct").textContent = "100 %";
+  }
   $("share").classList.add("hidden");
   setChip(ok ? "ok" : "err", ok ? "chip_done" : "chip_error");
   renderGo();
@@ -323,66 +416,123 @@ function finish(ok, title, sub, actions) {
 function onEvent(e) {
   if (!S.running && e.type !== "error") return;
   switch (e.type) {
+    // --- Envoi
+    case "preparing":
+      step("prepare"); phase("ph_preparing");
+      break;
     case "ready":
-      showShare(e.link, e.code);
+      step("publish");
+      showShare(e.link, e.code); setPub("pending");
+      phase("ph_publishing", null, { key: "ph_publishing_sub" });
       log(t("ev_ready", { name: e.name, n: e.files, size: fmtBytes(e.bytes) }));
       if (!e.relay) log(t("ev_no_relay"), "warn");
+      setChip("wait", "chip_publishing");
+      break;
+    case "published":
+      setPub("online"); step("wait");
+      if (S.stepIdx <= S.steps.indexOf("wait")) phase("ph_online", null, { key: "ph_online_sub" });
+      log(t("ev_published", { s: num(Math.round(e.seconds)) }));
+      setChip("wait", "chip_waiting");
+      break;
+    case "publish_slow":
+      setPub("slow"); step("wait");
+      if (S.stepIdx <= S.steps.indexOf("wait")) phase("ph_publish_slow", null, { key: "ph_publish_slow_sub" });
+      log(t("ev_publish_slow"), "warn");
       setChip("wait", "chip_waiting");
       break;
     case "new_code":
       $("share").classList.remove("locked");
       showShare(null, e.code); log(t("ev_new_code"));
+      phase("ph_new_code", null, { key: "ph_online_sub" });
       setChip("wait", "chip_waiting");
       break;
-    case "incoming": log(t("ev_incoming", { path: pathLabel(e.path) })); break;
-    case "wrong_code": log(t("ev_wrong_code", { n: e.remaining }), "warn"); break;
+    case "incoming":
+      step("wait");
+      phase("ph_incoming", { path: pathLabel(e.path) });
+      log(t("ev_incoming", { path: pathLabel(e.path) }));
+      break;
+    case "wrong_code":
+      phase("ph_wrong_code", { n: e.remaining }, { key: "ph_online_sub" }, "");
+      log(t("ev_wrong_code", { n: e.remaining }), "warn");
+      break;
     case "locked":
       $("share").classList.add("locked");
+      phase("ph_locked", null, null, "bad");
       log(t("ev_locked"), "err"); setChip("err", "chip_locked");
       break;
     case "authenticated":
+      step("code");
       $("share").classList.add("hidden");
+      phase("ph_code_ok_send");
       log(t("ev_authenticated", { path: pathLabel(e.path) }));
       setChip("run", "chip_sending");
       break;
     case "selected":
+      step("transfer");
       log(t("ev_selected", { n: e.files, size: fmtBytes(e.bytes) }));
       startProgress(e.bytes);
       break;
     case "interrupted":
       $("share").classList.remove("hidden");
+      phase("ph_interrupted", null, { key: "ph_interrupted_sub" });
       log(t("ev_interrupted"), "warn"); log(e.message, "dim");
       setChip("wait", "chip_waiting");
       break;
     case "delivered":
+      phase("ph_delivered", null, null, "ok");
       finish(true, t("banner_delivered"), t("banner_delivered_sub", { n: e.files, size: fmtBytes(e.bytes), path: pathLabel(e.path) }));
       log(t("ev_receipt", { hash: e.receipt.slice(0, 16) }), "dim");
       break;
-    case "expired": finish(false, t("banner_expired"), t("banner_expired_sub")); break;
+    case "expired":
+      phase("ph_expired", null, null, "bad");
+      finish(false, t("banner_expired"), t("banner_expired_sub"));
+      break;
+
+    // --- Réception
     case "waiting":
+      step("night");
+      phase("ph_night", { until: e.until }, { key: "ph_night_sub" });
       log(t("ev_waiting", { until: e.until, min: Math.ceil(e.seconds / 60) }));
       setChip("night", "chip_night");
       break;
-    case "searching": log(t("ev_searching")); setChip("run", "chip_searching"); break;
-    case "found": log(t("ev_found", { s: num(e.seconds.toFixed(1)), path: pathLabel(e.path) })); break;
+    case "searching":
+      step("search");
+      phase("ph_searching", null, { key: "ph_searching_sub" });
+      log(t("ev_searching")); setChip("run", "chip_searching");
+      break;
+    case "found":
+      step("code");
+      phase("ph_found", { path: pathLabel(e.path) });
+      log(t("ev_found", { s: num(e.seconds.toFixed(1)), path: pathLabel(e.path) }));
+      break;
     case "manifest":
+      step("transfer");
       log(t("ev_code_ok"));
       log(t("ev_manifest", { name: e.name, n: e.files, size: fmtBytes(e.bytes), o: e.originals, p: e.proxies, s: e.sidecars }));
       setChip("run", "chip_receiving");
       startProgress(e.bytes);
       break;
     case "file_verified": addFile(e); break;
+    case "finalizing":
+      if (e.step === "mhl") { step("mhl"); phase("ph_mhl"); log(t("ev_all_verified")); }
+      else phase("ph_receipt");
+      break;
     case "received":
       S.result = { folder: e.folder, mhl: e.mhl };
+      phase("ph_received", null, null, "ok");
       finish(true, t("banner_received"), t("banner_received_sub", { n: e.files, size: fmtBytes(e.bytes), d: fmtTime(e.seconds), path: pathLabel(e.path) }),
         `<button class="btn2" id="openFolder">${esc(t("open_folder"))}</button><button class="btn2" id="showMhl">${esc(t("show_mhl"))}</button>`);
       $("openFolder").onclick = () => api.open(S.result.folder);
       $("showMhl").onclick = () => api.reveal(S.result.mhl);
+      log(t("ev_mhl", { path: e.mhl }), "dim");
       break;
+
+    // --- Commun
     case "progress": progress(e); break;
     case "end_action": log(t("ev_end_" + e.action)); break;
     case "error":
       if (!S.running) { log(e.message, "err"); break; }
+      phase("ph_error", null, { raw: e.message }, "bad");
       finish(false, t("banner_error"), e.message);
       log(e.message, "err");
       break;
@@ -393,15 +543,19 @@ function onEvent(e) {
 
 async function go() {
   if (S.running) return;
-  resetRight(); showWork();
+  resetRight();
+  const night = S.mode === "recv" && $("nightOn").checked;
+  buildSteps(night);
+  showWork();
   S.running = true; renderGo();
   try {
     if (S.mode === "send") {
-      setChip("run", "chip_publishing");
-      log(t("ev_publishing"));
+      step("prepare"); phase("ph_preparing");
+      setChip("run", "chip_preparing");
       await api.send({ path: S.source.path, end_action: $("sendAfter").value });
     } else {
-      const night = $("nightOn").checked;
+      step(night ? "night" : "search");
+      phase(night ? "ph_night_start" : "ph_searching", null, night ? null : { key: "ph_searching_sub" });
       setChip("run", "chip_searching");
       await api.receive({
         link: $("link").value.trim(),
@@ -412,6 +566,7 @@ async function go() {
       });
     }
   } catch (e) {
+    phase("ph_error", null, { raw: String(e) }, "bad");
     finish(false, t("banner_error"), String(e));
   }
 }
@@ -419,7 +574,10 @@ async function go() {
 async function stop() {
   await api.cancel();
   S.running = false;
-  log(S.mode === "recv" ? t("ev_cancel_recv") : t("ev_cancel_send"), "warn");
+  S.final = "bad"; renderSteps();
+  const key = S.mode === "recv" ? "ph_cancel_recv" : "ph_cancel_send";
+  phase(key, null, null, "idle");
+  log(t(key), "warn");
   setChip("", "chip_cancelled");
   $("share").classList.add("hidden");
   renderGo();

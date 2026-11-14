@@ -12,6 +12,8 @@
 //! 8. transfert : pour chaque fichier, le récepteur ouvre un nouveau flux
 //!    bidirectionnel et envoie `Request`. L'émetteur répond par une suite de
 //!    `Block`, chacun suivi de ses octets bruts, puis par `FileDone`.
+//!    Pendant ce temps, le récepteur envoie régulièrement `Status` sur le flux
+//!    de contrôle (octets reçus et vérifiés).
 //! 9. récepteur → `Receipt` sur le flux de contrôle : accusé de réception
 //!
 //! L'émetteur ne révèle sa preuve qu'après avoir vérifié celle du récepteur :
@@ -59,6 +61,13 @@ pub enum Message {
     },
     Receipt(Receipt),
     Error(ProtocolError),
+    /// Avancement côté récepteur, envoyé régulièrement sur le flux de contrôle
+    /// pendant le transfert : octets reçus et octets déjà relus et vérifiés sur
+    /// son disque. Permet à l'émetteur d'afficher la vérification à distance.
+    Status {
+        received: u64,
+        verified: u64,
+    },
 }
 
 /// Rôle d'un fichier dans le manifeste, pour envoyer les proxys d'abord.

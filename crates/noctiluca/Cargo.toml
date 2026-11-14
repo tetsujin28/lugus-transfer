@@ -12,3 +12,5 @@ anyhow = { workspace = true }
 iroh = { workspace = true }
 iroh-mainline-address-lookup = { workspace = true }
 lugus-core = { workspace = true }
+n0-future = "0.3"
+tokio = { workspace = true }

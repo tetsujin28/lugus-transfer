@@ -17,9 +17,10 @@
 
 use std::fmt;
 use std::net::IpAddr;
+use std::time::Duration;
 
 use anyhow::{anyhow, Result};
-use iroh::address_lookup::AddrFilter;
+use iroh::address_lookup::{AddrFilter, AddressLookup};
 use iroh::endpoint::presets;
 pub use iroh::endpoint::{Connection, RecvStream, SendStream};
 use iroh::{Endpoint, PublicKey, RelayMode, SecretKey, TransportAddr};
@@ -27,6 +28,7 @@ use iroh_mainline_address_lookup::DhtAddressLookup;
 use lugus_core::link::LugusLink;
 use lugus_core::protocol::Message;
 use lugus_core::{wire, ALPN};
+use n0_future::StreamExt;
 
 /// Convertit une erreur iroh ou QUIC en `anyhow::Error`, en gardant son message.
 ///
@@ -218,6 +220,30 @@ pub async fn recv_msg(stream: &mut RecvStream, max_len: usize) -> Result<Message
     let mut body = vec![0u8; len];
     stream.read_exact(&mut body).await.map_err(net_err)?;
     Ok(wire::decode(&body)?)
+}
+
+/// Attend que le lien de `key` soit réellement trouvable dans la DHT, en le
+/// cherchant avec un client distinct, comme le fera le destinataire.
+/// Renvoie `false` si rien n'est trouvé avant `timeout`.
+pub async fn wait_until_published(key: [u8; 32], timeout: Duration) -> Result<bool> {
+    let id = PublicKey::from_bytes(&key).map_err(net_err)?;
+    let lookup = DhtAddressLookup::builder()
+        .no_publish()
+        .build()
+        .map_err(net_err)?;
+    let search = async {
+        loop {
+            if let Some(mut found) = lookup.resolve(id) {
+                while let Some(item) = found.next().await {
+                    if item.is_ok() {
+                        return true;
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(3)).await;
+        }
+    };
+    Ok(tokio::time::timeout(timeout, search).await.unwrap_or(false))
 }
 
 /// Chemin actuellement sélectionné par la connexion.
