@@ -25,7 +25,7 @@ postcard = { version = "1", default-features = false, features = ["alloc"] }
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "fs", "io-util"] }
 
 # Cryptographie
 blake3 = "1"
@@ -39,3 +39,4 @@ lugus-auth = { path = "crates/auth" }
 lugus-core = { path = "crates/core" }
 lugus-noctiluca = { path = "crates/noctiluca" }
 lugus-store = { path = "crates/store" }
+lugus-transfer = { path = "crates/transfer" }

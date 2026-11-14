@@ -18,4 +18,5 @@ lugus-auth = { workspace = true }
 lugus-core = { workspace = true }
 lugus-noctiluca = { workspace = true }
 lugus-store = { workspace = true }
+lugus-transfer = { workspace = true }
 tokio = { workspace = true }

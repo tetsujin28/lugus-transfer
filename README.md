@@ -11,18 +11,39 @@ côte tartessienne, donne son nom au module de découverte réseau.
 
 ## État
 
-Étape 2 : les deux machines se trouvent par la DHT, s'authentifient avec le
-code, puis l'émetteur envoie le manifeste et le récepteur sa sélection.
-Aucun fichier n'est encore transféré (étape 3).
+Étape 3 : découverte par la DHT, authentification par code, puis transfert
+complet des fichiers avec reprise et vérification par relecture du disque.
+L'interface Tauri et le MHL viendront ensuite.
 
 | Crate | Rôle | État |
 |---|---|---|
 | `core` | lien, code (Damm), limiteur d'essais, messages, encodage | écrit, non compilé |
 | `noctiluca` | découverte par la DHT, endpoint iroh, trames, chemin utilisé | écrit, non compilé |
 | `auth` | SPAKE2 lié à la connexion, étiquettes de confirmation | écrit, non compilé |
-| `store` | manifeste (BLAKE3, blocs, reprise et MHL à venir) | en partie |
+| `store` | manifeste, réception par blocs, journal de reprise, liste `b3sum` | écrit, non compilé |
+| `transfer` | service des fichiers, réception parallèle, accusé de réception | écrit, non compilé |
 | `cli` | binaire `lugus` (`send`, `receive`, `code`) | écrit, non compilé |
-| `transfer` | sessions et ordonnanceur de blocs | à faire |
+
+## Transfert et intégrité
+
+- Blocs de 4 Mio. L'émetteur calcule le BLAKE3 de chaque bloc et du fichier
+  entier pendant la lecture, et les envoie avec les données.
+- Le récepteur écrit dans `<fichier>.lugus-part` et note le hash de chaque bloc
+  dans `<fichier>.lugus-journal`. Après une coupure, il suffit de relancer
+  `lugus receive` avec le même lien et le même code : la réception reprend au
+  dernier bloc écrit. L'émetteur reste en attente pendant ce temps.
+- À la fin de chaque fichier, il est **relu depuis le disque** : chaque bloc et
+  le hash complet sont comparés à ceux de la source. Le fichier reçoit ensuite
+  la date de modification d'origine et prend son nom définitif.
+- Un fichier déjà présent à destination avec la bonne taille est hashé et
+  comparé à la source au lieu d'être téléchargé.
+- 4 fichiers en parallèle par défaut (`--parallel`), proxys et fichiers annexes
+  avant les originaux.
+- À la fin, `<nom>.lugus.b3` liste les hash (vérifiable avec `b3sum --check`).
+  Le récepteur envoie un accusé contenant l'empreinte de cette liste,
+  authentifié avec la clé de session.
+- Le MHL (ASC MHL) viendra plus tard : il n'accepte pas BLAKE3 et demandera un
+  hash xxHash en plus.
 
 ## Règles du code d'accès
 
@@ -41,6 +62,8 @@ Aucun fichier n'est encore transféré (étape 3).
 3. récepteur → `Confirm` : sa preuve
 4. émetteur → `Confirm` s'il a vérifié la preuve, sinon `Error(WrongCode)`
 5. émetteur → `Manifest`, récepteur → `Select`
+6. un flux par fichier : `Request`, puis `Block` + données, puis `FileDone`
+7. récepteur → `Receipt`
 
 L'échange est lié à la connexion : identités SPAKE2 = clés iroh des deux pairs,
 et clé dérivée avec un secret exporté de la session TLS (RFC 5705).
@@ -65,12 +88,15 @@ cargo build --release
 
 Tests unitaires (sans réseau) : `cargo test`.
 
-Test de l'étape 2, sur deux machines :
+Test de l'étape 3, sur deux machines :
 
 ```
-lugus send <fichier ou dossier>              # affiche le lien, le code et le contenu
-lugus receive lugus://r/<clé> --code <code>  # s'authentifie et reçoit le manifeste
+lugus send <fichier ou dossier>                             # affiche le lien et le code
+lugus receive lugus://r/<clé> --code <code> --dest <dossier>  # reçoit et vérifie
 ```
+
+Pour tester la reprise, interrompez `receive` (Ctrl+C) en cours de route, puis
+relancez la même commande.
 
 Pour tester la règle des essais, lancez `receive` avec un code valide mais
 différent (par exemple généré par `lugus code`).

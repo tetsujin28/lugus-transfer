@@ -9,11 +9,16 @@
 //! 5. émetteur → `Confirm` : sa propre preuve, ou `Error(WrongCode)`
 //! 6. émetteur → `Manifest` : le contenu, envoyé uniquement après authentification
 //! 7. récepteur → `Select` : fichiers choisis et ordre
-//! 8. transfert des blocs (crate `transfer`, pas encore défini ici)
-//! 9. récepteur → `Receipt` : accusé de réception signé avec le hash final
+//! 8. transfert : pour chaque fichier, le récepteur ouvre un nouveau flux
+//!    bidirectionnel et envoie `Request`. L'émetteur répond par une suite de
+//!    `Block`, chacun suivi de ses octets bruts, puis par `FileDone`.
+//! 9. récepteur → `Receipt` sur le flux de contrôle : accusé de réception
 //!
 //! L'émetteur ne révèle sa preuve qu'après avoir vérifié celle du récepteur :
 //! un attaquant qui se trompe de code n'apprend rien.
+
+/// Taille d'un bloc de données. Chaque bloc a son hash BLAKE3.
+pub const BLOCK_SIZE: u64 = 4 * 1024 * 1024;
 
 use serde::{Deserialize, Serialize};
 
@@ -22,11 +27,36 @@ pub type Hash = [u8; 32];
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Message {
-    Hello { version: u8 },
-    Pake { payload: Vec<u8> },
-    Confirm { tag: [u8; 32] },
+    Hello {
+        version: u8,
+    },
+    Pake {
+        payload: Vec<u8>,
+    },
+    Confirm {
+        tag: [u8; 32],
+    },
     Manifest(Manifest),
     Select(Selection),
+    /// Demande d'un fichier (indice dans le manifeste) à partir d'un décalage,
+    /// toujours multiple de `BLOCK_SIZE` (reprise).
+    Request {
+        file: u32,
+        offset: u64,
+    },
+    /// En-tête d'un bloc : `len` octets bruts suivent immédiatement sur le flux.
+    /// `hash` est le BLAKE3 de ces octets, calculé par l'émetteur à la lecture.
+    Block {
+        offset: u64,
+        len: u32,
+        hash: Hash,
+    },
+    /// Fin du fichier. `full_hash` est le BLAKE3 du fichier source entier :
+    /// en reprise, l'émetteur relit aussi la partie déjà envoyée pour le
+    /// calculer. Le récepteur le compare à sa relecture du disque.
+    FileDone {
+        full_hash: Option<Hash>,
+    },
     Receipt(Receipt),
     Error(ProtocolError),
 }
@@ -75,8 +105,12 @@ pub struct Selection {
 pub struct Receipt {
     pub file_count: u32,
     pub total_bytes: u64,
+    /// BLAKE3 de la liste des hash (format `b3sum`) écrite par le récepteur.
     pub final_hash: Hash,
-    pub signature: Vec<u8>,
+    /// Authentifiant : BLAKE3 avec clé (clé de session) de `final_hash`.
+    /// Prouve à l'émetteur que l'accusé vient bien du destinataire authentifié.
+    /// Ce n'est pas une signature vérifiable par un tiers.
+    pub mac: Hash,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -96,6 +130,10 @@ pub enum ProtocolError {
     CodeLocked,
     /// Message inattendu ou mal formé.
     BadMessage,
+    /// Le fichier source a changé depuis la création du manifeste.
+    SourceChanged,
+    /// Le fichier source ne peut pas être lu.
+    FileUnavailable,
     LinkExpired,
     Busy,
 }

@@ -1,12 +1,14 @@
 //! Binaire de test de Lugus Transfer : `lugus send`, `lugus receive`, `lugus code`.
 //!
-//! Étape 2 : l'émetteur publie ses adresses dans la DHT, le récepteur le
-//! retrouve grâce au lien, puis les deux s'authentifient avec le code (SPAKE2,
-//! 3 essais). Une fois le code accepté, l'émetteur envoie le manifeste et le
-//! récepteur renvoie sa sélection. Aucun fichier n'est encore transféré (étape 3).
+//! Étape 3 : découverte par la DHT, authentification par code (SPAKE2, 3
+//! essais), échange du manifeste et de la sélection, puis transfert des
+//! fichiers par blocs vérifiés, avec reprise, relecture du disque, liste des
+//! hash au format `b3sum` et accusé de réception authentifié.
 
 use std::io::{self, Write};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -18,9 +20,10 @@ use lugus_core::link::LugusLink;
 use lugus_core::protocol::{FileKind, Manifest, Message, ProtocolError, Selection};
 use lugus_core::{wire, DEFAULT_LINK_TTL_SECS, MAX_CODE_ATTEMPTS, PROTOCOL_VERSION};
 use lugus_noctiluca::{
-    channel_binding, current_path, net_err, recv_msg, remote_key, send_msg, Beacon, Role,
-    HANDSHAKE_MAX_LEN,
+    channel_binding, current_path, net_err, recv_msg, remote_key, send_msg, Beacon, Connection,
+    RecvStream, Role, SendStream, HANDSHAKE_MAX_LEN,
 };
+use lugus_transfer::{Source, DEFAULT_PARALLEL_FILES};
 
 /// Délai maximal pour trouver l'émetteur dans la DHT et s'y connecter.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(90);
@@ -33,6 +36,9 @@ const HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Délai laissé au pair pour lire nos derniers messages avant de fermer.
 const LINGER: Duration = Duration::from_secs(5);
+
+/// Intervalle d'affichage de la progression.
+const PROGRESS_INTERVAL: Duration = Duration::from_secs(2);
 
 #[derive(Parser)]
 #[command(
@@ -62,6 +68,9 @@ enum Command {
         /// Dossier de destination
         #[arg(long, default_value = ".")]
         dest: PathBuf,
+        /// Nombre de fichiers reçus en parallèle
+        #[arg(long, default_value_t = DEFAULT_PARALLEL_FILES)]
+        parallel: usize,
     },
     /// Génère un code d'exemple, ou vérifie un code donné (sans réseau).
     Code {
@@ -75,7 +84,12 @@ async fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Command::Send { path } => cmd_send(path).await,
-        Command::Receive { link, code, dest } => cmd_receive(link, code, dest).await,
+        Command::Receive {
+            link,
+            code,
+            dest,
+            parallel,
+        } => cmd_receive(link, code, dest, parallel).await,
         Command::Code { check } => cmd_code(check),
     }
 }
@@ -85,11 +99,12 @@ async fn main() -> Result<()> {
 // ---------------------------------------------------------------------------
 
 async fn cmd_send(path: PathBuf) -> Result<()> {
-    let manifest = lugus_store::scan(&path)
-        .with_context(|| format!("lecture de {} impossible", path.display()))?;
-    if manifest.files.is_empty() {
+    let source =
+        Source::new(&path).with_context(|| format!("lecture de {} impossible", path.display()))?;
+    if source.manifest().files.is_empty() {
         bail!("aucun fichier à envoyer dans {}", path.display());
     }
+    let source = Arc::new(source);
     warn_if_wordlist_is_small();
 
     let mut access = AccessCode::generate().context("génération du code")?;
@@ -115,7 +130,7 @@ async fn cmd_send(path: PathBuf) -> Result<()> {
         DEFAULT_LINK_TTL_SECS / 3600
     );
     println!();
-    print_manifest_summary(&manifest);
+    print_manifest_summary(source.manifest());
     println!();
     eprintln!(
         "Publication dans la DHT en cours (quelques secondes). \
@@ -136,12 +151,21 @@ async fn cmd_send(path: PathBuf) -> Result<()> {
         .await;
 
         match handshake {
-            Ok(Ok(Some((mut send, mut recv)))) => {
+            Ok(Ok(Some(accepted))) => {
                 eprintln!("Code accepté.");
-                serve_manifest(&mut send, &mut recv, &manifest).await?;
-                let _ = tokio::time::timeout(LINGER, conn.closed()).await;
-                eprintln!("Chemin final : {}", current_path(&conn));
-                break;
+                match send_session(&conn, source.clone(), accepted).await {
+                    Ok(()) => {
+                        let _ = tokio::time::timeout(LINGER, conn.closed()).await;
+                        break;
+                    }
+                    Err(err) => {
+                        // Le lien reste valable : le destinataire peut relancer la
+                        // réception, qui reprendra là où elle s'est arrêtée.
+                        eprintln!("Transfert interrompu : {err:#}");
+                        eprintln!("En attente d'une reprise par le destinataire…");
+                        continue;
+                    }
+                }
             }
             Ok(Ok(None)) => {
                 let _ = tokio::time::timeout(LINGER, conn.closed()).await;
@@ -172,14 +196,21 @@ async fn cmd_send(path: PathBuf) -> Result<()> {
     Ok(())
 }
 
-/// Poignée de main côté émetteur. Renvoie les flux si le code est accepté,
-/// `None` si la demande a été refusée (le pair a reçu un message d'erreur).
+/// Résultat d'une poignée de main réussie : flux de contrôle et clé de session.
+struct Accepted {
+    send: SendStream,
+    recv: RecvStream,
+    session_key: [u8; 32],
+}
+
+/// Poignée de main côté émetteur. `None` si la demande a été refusée (le pair
+/// a reçu un message d'erreur).
 async fn sender_handshake(
-    conn: &lugus_noctiluca::Connection,
+    conn: &Connection,
     access: &AccessCode,
     limiter: &mut AttemptLimiter,
     own_key: [u8; 32],
-) -> Result<Option<(lugus_noctiluca::SendStream, lugus_noctiluca::RecvStream)>> {
+) -> Result<Option<Accepted>> {
     let (mut send, mut recv) = conn.accept_bi().await.map_err(net_err)?;
 
     match recv_msg(&mut recv, HANDSHAKE_MAX_LEN).await? {
@@ -254,49 +285,67 @@ async fn sender_handshake(
         },
     )
     .await?;
-    Ok(Some((send, recv)))
+    Ok(Some(Accepted {
+        send,
+        recv,
+        session_key: *session.key(),
+    }))
 }
 
-/// Envoie le manifeste et attend la sélection du destinataire.
-async fn serve_manifest(
-    send: &mut lugus_noctiluca::SendStream,
-    recv: &mut lugus_noctiluca::RecvStream,
-    manifest: &Manifest,
-) -> Result<()> {
-    send_msg(send, &Message::Manifest(manifest.clone())).await?;
-    match recv_msg(recv, wire::MAX_FRAME_LEN).await? {
-        Message::Select(selection) => {
-            let valid = selection
-                .files
-                .iter()
-                .all(|&i| (i as usize) < manifest.files.len());
-            if !valid {
-                bail!("sélection invalide reçue");
-            }
-            let bytes: u64 = selection
-                .files
-                .iter()
-                .map(|&i| manifest.files[i as usize].size)
-                .sum();
-            eprintln!(
-                "Le destinataire a choisi {} fichier(s), {} (proxys d'abord : {}).",
-                selection.files.len(),
-                human_bytes(bytes),
-                if selection.proxies_first {
-                    "oui"
-                } else {
-                    "non"
-                }
-            );
-            eprintln!("Le transfert des fichiers arrive à l'étape 3.");
-        }
-        other => bail!("réponse inattendue : {other:?}"),
+/// Après authentification : manifeste, sélection, service des fichiers, accusé.
+async fn send_session(conn: &Connection, source: Arc<Source>, accepted: Accepted) -> Result<()> {
+    let Accepted {
+        mut send,
+        mut recv,
+        session_key,
+    } = accepted;
+    let manifest = source.manifest();
+
+    send_msg(&mut send, &Message::Manifest(manifest.clone())).await?;
+    let selection = match recv_msg(&mut recv, wire::MAX_FRAME_LEN).await? {
+        Message::Select(selection) => selection,
+        other => bail!("sélection attendue, reçu : {other:?}"),
+    };
+    if selection
+        .files
+        .iter()
+        .any(|&i| (i as usize) >= manifest.files.len())
+    {
+        bail!("sélection invalide reçue");
     }
+    let total: u64 = selection
+        .files
+        .iter()
+        .map(|&i| manifest.files[i as usize].size)
+        .sum();
+    eprintln!(
+        "Le destinataire a choisi {} fichier(s), {}.",
+        selection.files.len(),
+        human_bytes(total)
+    );
+
+    let sent = Arc::new(AtomicU64::new(0));
+    let progress = spawn_progress("Envoyé", sent.clone(), total);
+    let result = lugus_transfer::serve(conn.clone(), source.clone(), recv, session_key, sent).await;
+    progress.abort();
+    eprintln!();
+    let receipt = result?;
+
+    eprintln!(
+        "Livré et vérifié : {} fichier(s), {}. Accusé de réception authentique.",
+        receipt.file_count,
+        human_bytes(receipt.total_bytes)
+    );
+    eprintln!(
+        "Empreinte de la liste des hash du destinataire : {}",
+        lugus_store::hex(&receipt.final_hash)
+    );
+    eprintln!("Chemin final : {}", current_path(conn));
     send.finish().map_err(net_err)?;
     Ok(())
 }
 
-async fn reject(send: &mut lugus_noctiluca::SendStream, error: ProtocolError) -> Result<()> {
+async fn reject(send: &mut SendStream, error: ProtocolError) -> Result<()> {
     send_msg(send, &Message::Error(error)).await?;
     send.finish().map_err(net_err)?;
     Ok(())
@@ -306,7 +355,12 @@ async fn reject(send: &mut lugus_noctiluca::SendStream, error: ProtocolError) ->
 // Récepteur
 // ---------------------------------------------------------------------------
 
-async fn cmd_receive(link: String, code: Option<String>, dest: PathBuf) -> Result<()> {
+async fn cmd_receive(
+    link: String,
+    code: Option<String>,
+    dest: PathBuf,
+    parallel: usize,
+) -> Result<()> {
     let link: LugusLink = link.parse().context("lien invalide")?;
 
     let raw = match code {
@@ -323,6 +377,8 @@ async fn cmd_receive(link: String, code: Option<String>, dest: PathBuf) -> Resul
         .parse()
         .context("code invalide (vérifié en local, aucun essai consommé)")?;
 
+    std::fs::create_dir_all(&dest)
+        .with_context(|| format!("création de {} impossible", dest.display()))?;
     eprintln!("Destination : {}", dest.display());
     eprintln!("Recherche de l'émetteur dans la DHT…");
 
@@ -389,6 +445,7 @@ async fn cmd_receive(link: String, code: Option<String>, dest: PathBuf) -> Resul
     {
         bail!("chemin dangereux dans le manifeste : {}", bad.path);
     }
+    let layout = lugus_store::layout(&dest, &manifest)?;
     println!();
     print_manifest_summary(&manifest);
 
@@ -397,14 +454,48 @@ async fn cmd_receive(link: String, code: Option<String>, dest: PathBuf) -> Resul
         files: (0..manifest.files.len() as u32).collect(),
         proxies_first: true,
     };
+    let order = lugus_transfer::order(&manifest, &selection);
+    let total: u64 = order.iter().map(|&i| manifest.files[i as usize].size).sum();
     send_msg(&mut send, &Message::Select(selection)).await?;
+
+    let received = Arc::new(AtomicU64::new(0));
+    let progress = spawn_progress("Reçu", received.clone(), total);
+    let transfer_started = Instant::now();
+    let result = lugus_transfer::fetch(
+        &conn,
+        Arc::new(manifest.clone()),
+        order,
+        layout.base.clone(),
+        parallel,
+        received,
+    )
+    .await;
+    progress.abort();
+    eprintln!();
+    let hashes = result?;
+
+    let (list_path, list_hash) =
+        lugus_store::write_hash_list(&dest, &manifest.name, &layout.prefix, &hashes)
+            .context("écriture de la liste des hash")?;
+    let receipt =
+        lugus_transfer::make_receipt(hashes.len() as u32, total, list_hash, session.key());
+    send_msg(&mut send, &Message::Receipt(receipt)).await?;
     send.finish().map_err(net_err)?;
 
-    // Attend que l'émetteur ait lu la sélection et fermé son côté.
-    let _ = tokio::time::timeout(LINGER, recv.read_to_end(0)).await;
+    eprintln!(
+        "Reçu et vérifié : {} fichier(s), {} en {:.0} s.",
+        hashes.len(),
+        human_bytes(total),
+        transfer_started.elapsed().as_secs_f64()
+    );
+    eprintln!(
+        "Liste des hash : {} (vérifiable avec b3sum --check)",
+        list_path.display()
+    );
     eprintln!("Chemin final : {}", current_path(&conn));
-    eprintln!("Le transfert des fichiers arrive à l'étape 3.");
 
+    // Attend que l'émetteur ait lu l'accusé et fermé son côté.
+    let _ = tokio::time::timeout(LINGER, recv.read_to_end(0)).await;
     conn.close(0u32.into(), b"fin");
     beacon.close().await;
     Ok(())
@@ -430,6 +521,10 @@ fn describe(error: &ProtocolError) -> String {
         ProtocolError::LinkExpired => "ce lien a expiré".to_string(),
         ProtocolError::Busy => "l'expéditeur est occupé, réessayez plus tard".to_string(),
         ProtocolError::BadMessage => "l'expéditeur a refusé un message mal formé".to_string(),
+        ProtocolError::SourceChanged => {
+            "un fichier a changé chez l'expéditeur depuis la création du lien".to_string()
+        }
+        ProtocolError::FileUnavailable => "un fichier est illisible chez l'expéditeur".to_string(),
     }
 }
 
@@ -481,6 +576,35 @@ fn print_manifest_summary(manifest: &Manifest) {
         count(FileKind::Proxy),
         count(FileKind::Sidecar)
     );
+}
+
+/// Affiche la progression toutes les 2 s jusqu'à ce que la tâche soit arrêtée.
+fn spawn_progress(
+    label: &'static str,
+    counter: Arc<AtomicU64>,
+    total: u64,
+) -> tokio::task::JoinHandle<()> {
+    tokio::spawn(async move {
+        let started = Instant::now();
+        let mut interval = tokio::time::interval(PROGRESS_INTERVAL);
+        loop {
+            interval.tick().await;
+            let done = counter.load(Ordering::Relaxed);
+            let percent = if total == 0 {
+                100.0
+            } else {
+                done as f64 * 100.0 / total as f64
+            };
+            let rate = done as f64 / started.elapsed().as_secs_f64().max(0.001);
+            eprint!(
+                "\r{label} : {} / {} ({percent:.0} %), {}/s     ",
+                human_bytes(done),
+                human_bytes(total),
+                human_bytes(rate as u64)
+            );
+            let _ = io::stderr().flush();
+        }
+    })
 }
 
 fn human_bytes(bytes: u64) -> String {

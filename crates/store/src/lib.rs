@@ -1,15 +1,104 @@
 //! Fichiers et intégrité.
 //!
-//! Pour l'instant : la construction du manifeste à partir d'un fichier ou d'un
-//! dossier. Viendront ensuite le hashage BLAKE3 en flux, la lecture et l'écriture
-//! par blocs vérifiés, le journal de reprise, le MHL et l'accusé de réception.
+//! - construction du manifeste à partir d'un fichier ou d'un dossier ;
+//! - réception par blocs avec reprise et vérification par relecture
+//!   (module `incoming`) ;
+//! - liste des hash au format `b3sum`, vérifiable avec `b3sum --check`.
+//!
+//! Le MHL (ASC MHL) viendra plus tard : il n'accepte pas BLAKE3 et demandera un
+//! hash xxHash calculé en plus.
 
+pub mod incoming;
+
+use std::fmt::Write as _;
 use std::fs;
 use std::io;
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 use std::time::UNIX_EPOCH;
 
-use lugus_core::protocol::{FileEntry, FileKind, Manifest};
+use lugus_core::protocol::{FileEntry, FileKind, Hash, Manifest};
+
+/// Où écrire les fichiers reçus.
+pub struct Layout {
+    /// Dossier racine des chemins du manifeste.
+    pub base: PathBuf,
+    /// Préfixe à ajouter aux chemins pour les exprimer depuis la destination.
+    pub prefix: String,
+}
+
+/// Disposition à destination : un dossier envoyé devient `dest/<nom>/…`, un
+/// fichier seul arrive directement dans `dest`.
+pub fn layout(dest: &Path, manifest: &Manifest) -> io::Result<Layout> {
+    if !is_safe_relative_path(&manifest.name) || manifest.name.contains('/') {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("nom de contenu refusé : {}", manifest.name),
+        ));
+    }
+    let single_file = manifest.files.len() == 1 && manifest.files[0].path == manifest.name;
+    if single_file {
+        Ok(Layout {
+            base: dest.to_path_buf(),
+            prefix: String::new(),
+        })
+    } else {
+        Ok(Layout {
+            base: dest.join(&manifest.name),
+            prefix: format!("{}/", manifest.name),
+        })
+    }
+}
+
+/// Dossier à partir duquel l'émetteur résout les chemins de son manifeste.
+pub fn source_root(path: &Path) -> io::Result<PathBuf> {
+    let metadata = fs::symlink_metadata(path)?;
+    if metadata.is_dir() {
+        Ok(path.to_path_buf())
+    } else {
+        Ok(path
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from(".")))
+    }
+}
+
+/// Chemin source d'une entrée du manifeste.
+pub fn source_path(root: &Path, entry: &FileEntry) -> PathBuf {
+    let mut path = root.to_path_buf();
+    for part in entry.path.split('/') {
+        path.push(part);
+    }
+    path
+}
+
+/// Écrit `dest/<nom>.lugus.b3` au format `b3sum` (`hash  chemin`, chemins relatifs
+/// à `dest`). Renvoie le chemin du fichier et le BLAKE3 de son contenu.
+pub fn write_hash_list(
+    dest: &Path,
+    manifest_name: &str,
+    prefix: &str,
+    hashes: &[(String, Hash)],
+) -> io::Result<(PathBuf, Hash)> {
+    let mut sorted: Vec<&(String, Hash)> = hashes.iter().collect();
+    sorted.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut content = String::new();
+    for (path, hash) in sorted {
+        let _ = writeln!(content, "{}  {prefix}{path}", hex(hash));
+    }
+    let list_path = dest.join(format!("{manifest_name}.lugus.b3"));
+    fs::write(&list_path, content.as_bytes())?;
+    Ok((list_path, *blake3::hash(content.as_bytes()).as_bytes()))
+}
+
+/// Hash en hexadécimal minuscule.
+pub fn hex(hash: &Hash) -> String {
+    hash.iter()
+        .fold(String::with_capacity(64), |mut out, byte| {
+            let _ = write!(out, "{byte:02x}");
+            out
+        })
+}
 
 /// Extensions considérées comme des fichiers vidéo ou des images de caméra.
 const MEDIA_EXTENSIONS: &[&str] = &[
@@ -86,7 +175,11 @@ fn entry(relative: String, metadata: &fs::Metadata) -> FileEntry {
 }
 
 fn is_ignored(file_name: &str) -> bool {
-    file_name.starts_with('.') || IGNORED_NAMES.contains(&file_name)
+    file_name.starts_with('.')
+        || IGNORED_NAMES.contains(&file_name)
+        || file_name.ends_with(".lugus-part")
+        || file_name.ends_with(".lugus-journal")
+        || file_name.ends_with(".lugus.b3")
 }
 
 /// Chemin relatif avec `/`, uniquement fait de composants normaux.
@@ -145,6 +238,48 @@ mod tests {
         assert_eq!(classify("A001/A001C003.xml"), FileKind::Sidecar);
         assert_eq!(classify("LUT/show.cube"), FileKind::Sidecar);
         assert_eq!(classify("README"), FileKind::Sidecar);
+    }
+
+    #[test]
+    fn layout_for_folder_and_single_file() {
+        let folder = Manifest {
+            name: "J04".to_string(),
+            files: vec![],
+        };
+        let layout_folder = layout(Path::new("/dest"), &folder).unwrap();
+        assert_eq!(layout_folder.base, Path::new("/dest").join("J04"));
+        assert_eq!(layout_folder.prefix, "J04/");
+
+        let single = Manifest {
+            name: "clip.mov".to_string(),
+            files: vec![FileEntry {
+                path: "clip.mov".to_string(),
+                size: 1,
+                modified_unix: None,
+                kind: FileKind::Original,
+                root_hash: None,
+            }],
+        };
+        let layout_single = layout(Path::new("/dest"), &single).unwrap();
+        assert_eq!(layout_single.base, Path::new("/dest"));
+        assert_eq!(layout_single.prefix, "");
+
+        let evil = Manifest {
+            name: "..".to_string(),
+            files: vec![],
+        };
+        assert!(layout(Path::new("/dest"), &evil).is_err());
+    }
+
+    #[test]
+    fn hex_format() {
+        let mut hash = [0u8; 32];
+        hash[0] = 0xab;
+        hash[31] = 0x01;
+        let text = hex(&hash);
+        assert_eq!(text.len(), 64);
+        assert!(text.starts_with("ab00"));
+        assert!(text.ends_with("01"));
     }
 
     #[test]

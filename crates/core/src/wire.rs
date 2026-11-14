@@ -70,6 +70,16 @@ mod tests {
         });
         roundtrip(Message::Confirm { tag: [9u8; 32] });
         roundtrip(Message::Error(ProtocolError::WrongCode { remaining: 2 }));
+        roundtrip(Message::Request {
+            file: 3,
+            offset: 8 * 1024 * 1024,
+        });
+        roundtrip(Message::Block {
+            offset: 0,
+            len: 4096,
+            hash: [1u8; 32],
+        });
+        roundtrip(Message::FileDone { full_hash: None });
     }
 
     #[test]
