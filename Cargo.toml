@@ -21,5 +21,11 @@ clap = { version = "4", features = ["derive"] }
 rand = "0.8"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time"] }
+
+# Réseau. iroh 1.4 exige Rust 1.91 au minimum.
+iroh = "1.4"
+iroh-mainline-address-lookup = "0.6"
 
 lugus-core = { path = "crates/core" }
+lugus-noctiluca = { path = "crates/noctiluca" }

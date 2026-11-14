@@ -1,9 +1,15 @@
 [package]
 name = "lugus-noctiluca"
-description = "Noctiluca : découverte des pairs (pkarr/DHT), iroh, boîte aux lettres, UPnP/PCP"
+description = "Noctiluca : découverte des pairs par la DHT (pkarr) et connexion iroh"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
 repository.workspace = true
+# iroh 1.4 exige Rust 1.91 au minimum.
+rust-version = "1.91"
 
 [dependencies]
+anyhow = { workspace = true }
+iroh = { workspace = true }
+iroh-mainline-address-lookup = { workspace = true }
+lugus-core = { workspace = true }
