@@ -498,10 +498,12 @@ mod tests {
         let base = temp_dir("empty");
         let incoming = partial(&base, &entry(0));
         assert!(incoming.is_complete());
-        let full = incoming
+        let verified = incoming
             .finish(Some(*blake3::hash(b"").as_bytes()))
             .unwrap();
-        assert_eq!(full, *blake3::hash(b"").as_bytes());
+        assert_eq!(verified.blake3, *blake3::hash(b"").as_bytes());
+        // Valeur de référence de xxHash64 pour un fichier vide.
+        assert_eq!(verified.xxh64, 0xef46db3751d8e999);
         assert_eq!(fs::read(base.join("A001/clip.mov")).unwrap().len(), 0);
         fs::remove_dir_all(&base).unwrap();
     }
