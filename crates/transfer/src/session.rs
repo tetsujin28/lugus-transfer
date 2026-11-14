@@ -6,8 +6,9 @@
 //!   (3 essais), sert les fichiers, reçoit l'accusé. Reste en attente après une
 //!   coupure pour permettre la reprise. Le lien expire au bout de 24 h.
 //! - `run_receiver` : (attend l'heure de départ en mode Noctiluca), trouve
-//!   l'émetteur, s'authentifie, reçoit et vérifie les fichiers, écrit le MHL,
-//!   envoie l'accusé.
+//!   l'émetteur, s'authentifie, laisse l'utilisateur choisir les fichiers (sauf
+//!   en mode Noctiluca, où tout est reçu), reçoit et vérifie les fichiers, écrit
+//!   le MHL, envoie l'accusé.
 //!
 //! Les deux gardent la machine éveillée pendant toute la session et peuvent la
 //! mettre en veille ou l'éteindre à la fin.
@@ -133,6 +134,17 @@ pub enum Event {
         proxies: usize,
         sidecars: usize,
     },
+    /// Le contenu proposé, en attente du choix de l'utilisateur
+    /// (`ReceiveOptions` avec un canal de choix). L'indice de chaque fichier
+    /// est sa position dans `files`.
+    Choose {
+        files: Vec<ChoiceEntry>,
+    },
+    /// Fichiers choisis par l'utilisateur.
+    Chosen {
+        files: usize,
+        bytes: u64,
+    },
     FileVerified {
         path: String,
         size: u64,
@@ -171,6 +183,18 @@ pub enum Event {
     },
 }
 
+/// Un fichier proposé par l'émetteur, pour l'écran de choix.
+#[derive(Debug, Clone, Serialize)]
+pub struct ChoiceEntry {
+    pub path: String,
+    pub size: u64,
+    pub kind: FileKind,
+}
+
+/// Canal par lequel l'interface donne les fichiers choisis (indices dans le
+/// manifeste) à une réception en cours.
+pub type Choices = mpsc::UnboundedReceiver<Vec<u32>>;
+
 /// Reçoit les événements d'une session.
 pub type Emit = Arc<dyn Fn(Event) + Send + Sync>;
 
@@ -184,6 +208,10 @@ pub enum SenderCommand {
 #[derive(Debug, Clone, Deserialize)]
 pub struct SendOptions {
     pub path: PathBuf,
+    /// Fichiers choisis dans le dossier (chemins relatifs, séparateur `/`).
+    /// Absent : tout le dossier.
+    #[serde(default)]
+    pub only: Option<Vec<String>>,
     #[serde(default)]
     pub end_action: EndAction,
 }
@@ -217,9 +245,11 @@ pub async fn run_sender(
 ) -> Result<()> {
     emit(Event::Preparing);
     let path = options.path.clone();
-    let source = tokio::task::spawn_blocking(move || Source::new(&path))
-        .await?
-        .with_context(|| format!("lecture de {} impossible", options.path.display()))?;
+    let only = options.only.clone();
+    let source =
+        tokio::task::spawn_blocking(move || Source::with_selection(&path, only.as_deref()))
+            .await?
+            .with_context(|| format!("lecture de {} impossible", options.path.display()))?;
     if source.manifest().files.is_empty() {
         bail!("aucun fichier à envoyer dans {}", options.path.display());
     }
@@ -534,7 +564,13 @@ async fn reject(send: &mut SendStream, error: ProtocolError) -> Result<()> {
 // Récepteur
 // ---------------------------------------------------------------------------
 
-pub async fn run_receiver(options: ReceiveOptions, emit: Emit) -> Result<()> {
+/// `choices` : si présent, la réception attend le choix des fichiers avant de
+/// les demander. Ignoré en mode Noctiluca (personne n'est là pour choisir).
+pub async fn run_receiver(
+    options: ReceiveOptions,
+    emit: Emit,
+    choices: Option<Choices>,
+) -> Result<()> {
     // Tout est vérifié en local avant d'attendre ou de contacter l'émetteur.
     let link: LugusLink = options.link.trim().parse().context("lien invalide")?;
     let access: AccessCode = options
@@ -548,6 +584,7 @@ pub async fn run_receiver(options: ReceiveOptions, emit: Emit) -> Result<()> {
         )),
         _ => None,
     };
+    let mut choices = if start_delay.is_some() { None } else { choices };
     std::fs::create_dir_all(&options.dest)
         .with_context(|| format!("création de {} impossible", options.dest.display()))?;
 
@@ -626,9 +663,35 @@ pub async fn run_receiver(options: ReceiveOptions, emit: Emit) -> Result<()> {
     let layout = lugus_store::layout(&options.dest, &manifest)?;
     emit(manifest_event(&manifest));
 
-    // Pour l'instant, tout est choisi, proxys d'abord.
+    // Choix de l'utilisateur, ou tout le contenu. Proxys d'abord.
+    let chosen = match choices.as_mut() {
+        Some(choices) => {
+            emit(Event::Choose {
+                files: manifest
+                    .files
+                    .iter()
+                    .map(|f| ChoiceEntry {
+                        path: f.path.clone(),
+                        size: f.size,
+                        kind: f.kind,
+                    })
+                    .collect(),
+            });
+            let picked = choices.recv().await.context("réception annulée")?;
+            let chosen = clean_choice(picked, manifest.files.len())?;
+            emit(Event::Chosen {
+                files: chosen.len(),
+                bytes: chosen
+                    .iter()
+                    .map(|&i| manifest.files[i as usize].size)
+                    .sum(),
+            });
+            chosen
+        }
+        None => (0..manifest.files.len() as u32).collect(),
+    };
     let selection = Selection {
-        files: (0..manifest.files.len() as u32).collect(),
+        files: chosen,
         proxies_first: true,
     };
     let order = crate::order(&manifest, &selection);
@@ -768,6 +831,19 @@ pub async fn run_receiver(options: ReceiveOptions, emit: Emit) -> Result<()> {
     Ok(())
 }
 
+/// Indices choisis : triés, sans doublon, tous valides, au moins un.
+fn clean_choice(mut picked: Vec<u32>, count: usize) -> Result<Vec<u32>> {
+    picked.sort_unstable();
+    picked.dedup();
+    if picked.is_empty() {
+        bail!("aucun fichier choisi");
+    }
+    if picked.iter().any(|&i| i as usize >= count) {
+        bail!("choix de fichiers invalide");
+    }
+    Ok(picked)
+}
+
 fn manifest_event(manifest: &Manifest) -> Event {
     let count = |kind: FileKind| manifest.files.iter().filter(|f| f.kind == kind).count();
     Event::Manifest {
@@ -858,5 +934,17 @@ fn finish_with(action: EndAction, emit: &Emit) {
         emit(Event::Error {
             message: format!("action de fin impossible : {err}"),
         });
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn choice_is_cleaned() {
+        assert_eq!(clean_choice(vec![3, 1, 3, 0], 4).unwrap(), vec![0, 1, 3]);
+        assert!(clean_choice(vec![], 4).is_err());
+        assert!(clean_choice(vec![1, 4], 4).is_err());
     }
 }

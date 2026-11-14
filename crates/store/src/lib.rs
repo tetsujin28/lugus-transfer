@@ -149,11 +149,40 @@ pub fn scan(path: &Path) -> io::Result<Manifest> {
     Ok(Manifest { name, files })
 }
 
+/// Ne garde du manifeste que les chemins choisis par l'expéditeur, dans l'ordre
+/// du manifeste. Erreur si la liste est vide ou si un chemin n'existe plus (le
+/// dossier a changé entre le choix et l'envoi).
+pub fn keep_only(manifest: Manifest, only: &[String]) -> io::Result<Manifest> {
+    if only.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "aucun fichier choisi",
+        ));
+    }
+    let wanted: std::collections::HashSet<&str> = only.iter().map(String::as_str).collect();
+    let files: Vec<FileEntry> = manifest
+        .files
+        .into_iter()
+        .filter(|f| wanted.contains(f.path.as_str()))
+        .collect();
+    if files.len() != wanted.len() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "des fichiers choisis ont disparu ou changé de nom : choisis à nouveau le dossier",
+        ));
+    }
+    Ok(Manifest {
+        name: manifest.name,
+        files,
+    })
+}
+
 /// Nom du contenu tel que le verra le destinataire : le nom du dossier ou du
 /// fichier, sans caractère interdit. Une racine de disque n'a pas de nom : on
 /// prend le nom du volume (sous Windows, celui affiché dans l'Explorateur ; sur
-/// Mac, une carte est montée sous `/Volumes/<nom>` et a donc déjà un nom), et à
-/// défaut `Disque_G`.
+/// Mac, une carte est montée sous `/Volumes/<nom>` et a donc déjà un nom). Un
+/// disque sans nom devient `Rushes_<date d'envoi>` : la lettre du lecteur ne
+/// voudrait rien dire chez le destinataire.
 pub fn content_name(path: &Path) -> String {
     if let Some(name) = path.file_name() {
         let clean = sanitize_name(&name.to_string_lossy());
@@ -167,16 +196,7 @@ pub fn content_name(path: &Path) -> String {
             return clean;
         }
     }
-    let letters: String = path
-        .to_string_lossy()
-        .chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .collect();
-    if letters.is_empty() {
-        "Disque".to_string()
-    } else {
-        format!("Disque_{letters}")
-    }
+    format!("Rushes_{}", chrono::Local::now().format("%Y-%m-%d"))
 }
 
 /// Nom du volume dont `path` est la racine (Windows uniquement).
@@ -385,7 +405,7 @@ mod tests {
         // Racine : jamais de nom vide ni de caractère interdit.
         let root = content_name(Path::new("/"));
         assert!(is_safe_relative_path(&root) && !root.contains('/'));
-        assert!(root.starts_with("Disque"));
+        assert!(root.starts_with("Rushes_20"));
     }
 
     #[test]
@@ -435,6 +455,34 @@ mod tests {
         assert_eq!(manifest.files[0].kind, FileKind::Original);
 
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn keep_only_selected_paths() {
+        let file = |path: &str| FileEntry {
+            path: path.to_string(),
+            size: 1,
+            modified_unix: None,
+            kind: classify(path),
+            root_hash: None,
+        };
+        let manifest = Manifest {
+            name: "J04".to_string(),
+            files: vec![
+                file("A001/clip.braw"),
+                file("A001/clip.xml"),
+                file("Proxy/clip.mov"),
+            ],
+        };
+        let only = vec!["Proxy/clip.mov".to_string(), "A001/clip.braw".to_string()];
+        let kept = keep_only(manifest.clone(), &only).unwrap();
+        let paths: Vec<&str> = kept.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, ["A001/clip.braw", "Proxy/clip.mov"]);
+        assert_eq!(kept.name, "J04");
+
+        assert!(keep_only(manifest.clone(), &[]).is_err());
+        let gone = vec!["A001/absent.braw".to_string()];
+        assert!(keep_only(manifest, &gone).is_err());
     }
 
     #[test]

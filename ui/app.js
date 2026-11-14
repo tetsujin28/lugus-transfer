@@ -41,7 +41,7 @@ function applyLang() {
   document.querySelectorAll("[data-i18n-ph]").forEach((el) => (el.placeholder = t(el.dataset.i18nPh)));
   document.querySelectorAll("[data-i18n-title]").forEach((el) => (el.title = t(el.dataset.i18nTitle)));
   document.querySelectorAll("#lang button").forEach((b) => b.classList.toggle("on", b.dataset.l === LANG));
-  renderDrop(); renderDest(); renderGo(); renderIdle(); renderSteps(); renderPhase(); renderPub(); checkInputs();
+  renderDrop(); renderDest(); renderGo(); renderIdle(); renderSteps(); renderPhase(); renderPub(); renderPicker(); checkInputs();
   $("vLabel").textContent = t(S.mode === "send" ? "verified_remote" : "verified_local");
   S.modalFn?.();
 }
@@ -62,6 +62,7 @@ function tauriBackend() {
     send: (options) => invoke("start_send", { options }),
     receive: (options) => invoke("start_receive", { options }),
     newCode: () => invoke("new_code"),
+    choose: (files) => invoke("choose_files", { files }),
     cancel: () => invoke("cancel"),
     open: (path) => invoke("open_path", { path }),
     reveal: (path) => invoke("reveal_path", { path }),
@@ -101,39 +102,67 @@ function demoBackend() {
     }, 150);
     timers.push(tick);
   };
-  const demoFiles = ["Proxy/A001C001.mov", "Proxy/A001C002.mov", "A001/A001C001.xml", "A001/A001C001.braw", "A001/A001C002.braw"];
+  // Contenu simulé d'une journée de tournage.
+  const demoEntries = (() => {
+    const out = [];
+    for (const card of ["A001", "A002"]) {
+      for (let c = 1; c <= 4; c++) {
+        const clip = `${card}C00${c}`;
+        out.push({ path: `${card}/${clip}.braw`, size: 2.6e10 + c * 3.1e9, kind: "Original" });
+        out.push({ path: `${card}/${clip}.sidecar.xml`, size: 4200, kind: "Sidecar" });
+        out.push({ path: `Proxy/${card}/${clip}_proxy.mov`, size: 6.4e8 + c * 9e7, kind: "Proxy" });
+      }
+    }
+    out.push({ path: "Rapport_J04.pdf", size: 2.4e5, kind: "Sidecar" });
+    return out.sort((a, b) => (a.path < b.path ? -1 : 1));
+  })();
+  let chooseFn = null;
   return {
     demo: true,
     pickFolder: async () => "/Volumes/RUSHES/J04",
     pickFile: async () => "/Volumes/RUSHES/A001_09291343_C003.braw",
-    scan: async (path) => ({ path, name: path.split("/").pop(), files: path.endsWith(".braw") ? 1 : 214, bytes: path.endsWith(".braw") ? 4.2e9 : 6.2e11 }),
+    scan: async (path) => path.endsWith(".braw")
+      ? { path, name: path.split("/").pop(), files: 1, bytes: 4.2e9, folder: false, entries: [] }
+      : { path, name: path.split("/").pop(), files: demoEntries.length, bytes: demoEntries.reduce((a, e) => a + e.size, 0), folder: true, entries: demoEntries },
     checkCode: async (c) => { if (!/^\d{4}-[a-z]+-\d$/i.test(c.trim())) throw t("demo_code_shape"); return c.trim().toLowerCase(); },
     checkLink: async (l) => { if (!/^lugus:\/\/r\/[a-z0-9]{52}/.test(l.trim())) throw t("demo_link_shape"); },
     send: async (o) => {
       later(100, () => handler({ type: "preparing" }));
-      later(700, () => handler({ type: "ready", link, code: code(), name: o.path.split("/").pop(), files: 214, bytes: 6.2e11, relay: true }));
+      const files = o.only ? o.only.length : demoEntries.length;
+      const bytes = o.only ? demoEntries.filter((e) => o.only.includes(e.path)).reduce((a, e) => a + e.size, 0) : demoEntries.reduce((a, e) => a + e.size, 0);
+      later(700, () => handler({ type: "ready", link, code: code(), name: o.path.split("/").pop(), files, bytes, relay: true }));
       later(2600, () => handler({ type: "published", seconds: 1.9 }));
       later(4200, () => handler({ type: "incoming", path: "direct" }));
       later(4700, () => handler({ type: "wrong_code", remaining: 2 }));
       later(6500, () => handler({ type: "incoming", path: "direct" }));
       later(7000, () => handler({ type: "authenticated", path: "direct" }));
-      later(7400, () => { handler({ type: "selected", files: 214, bytes: 6.2e11 }); run(6.2e11, null, () => handler({ type: "delivered", files: 214, bytes: 6.2e11, receipt: "3f9a1c0e7b52d4a8", path: "direct" })); });
+      later(7400, () => { handler({ type: "selected", files, bytes }); run(bytes, null, () => handler({ type: "delivered", files, bytes, receipt: "3f9a1c0e7b52d4a8", path: "direct" })); });
     },
     receive: async (o) => {
       const d = o.start_at ? 3000 : 0;
       if (o.start_at) handler({ type: "waiting", until: o.start_at, seconds: 180 });
       later(d + 300, () => handler({ type: "searching" }));
       later(d + 1800, () => handler({ type: "found", seconds: 1.5, path: "direct" }));
-      later(d + 2500, () => {
-        handler({ type: "manifest", name: "J04", files: demoFiles.length, bytes: 2.1e10, originals: 2, proxies: 2, sidecars: 1 });
-        run(2.1e10, demoFiles, () => {
+      const count = (k) => demoEntries.filter((e) => e.kind === k).length;
+      const all = demoEntries.reduce((a, e) => a + e.size, 0);
+      const go = (picked) => {
+        const chosen = picked.map((i) => demoEntries[i]);
+        const bytes = chosen.reduce((a, e) => a + e.size, 0);
+        if (!o.start_at) handler({ type: "chosen", files: chosen.length, bytes });
+        run(bytes, chosen.map((e) => e.path), () => {
           handler({ type: "finalizing", step: "mhl" });
           later(900, () => handler({ type: "finalizing", step: "receipt" }));
-          later(1600, () => handler({ type: "received", files: demoFiles.length, bytes: 2.1e10, seconds: 412, mhl: "/Reception/J04/J04_lugus_2026-11-14_221500.mhl", folder: "/Reception/J04", path: "direct" }));
+          later(1600, () => handler({ type: "received", files: chosen.length, bytes, seconds: 412, mhl: "/Reception/J04/J04_lugus_2026-11-14_221500.mhl", folder: "/Reception/J04", path: "direct" }));
         });
+      };
+      later(d + 2500, () => {
+        handler({ type: "manifest", name: "J04", files: demoEntries.length, bytes: all, originals: count("Original"), proxies: count("Proxy"), sidecars: count("Sidecar") });
+        if (o.start_at) go(demoEntries.map((_, i) => i));
+        else { chooseFn = go; handler({ type: "choose", files: demoEntries }); }
       });
     },
     newCode: async () => later(200, () => handler({ type: "new_code", code: code() })),
+    choose: async (files) => { const f = chooseFn; chooseFn = null; f?.(files); },
     cancel: async () => stopAll(),
     open: async () => log(t("demo_open"), "dim"),
     reveal: async () => log(t("demo_reveal"), "dim"),
@@ -157,12 +186,15 @@ const S = {
   phase: null,                        // { key, vars, sub, kind }
   pub: null,                          // "pending" | "online" | "slow" | null
   result: null,                       // { folder, mhl }
+  pick: null,                         // écran de choix : { side, entries, on: Set, open: Set }
+  sendPick: null,                     // choix d'envoi mis de côté pendant la réception
+  night: false,
   modalFn: null,
 };
 
 const STEPS = {
   send: ["prepare", "publish", "wait", "code", "transfer", "verify_remote", "done"],
-  recv: ["search", "code", "transfer", "verify", "mhl", "done"],
+  recv: ["search", "code", "choose", "transfer", "verify", "mhl", "done"],
 };
 
 function setChip(kind, key) {
@@ -185,7 +217,8 @@ function setMode(mode) {
 // ------------------------------------------------------------------ Étapes et phrase d'état
 
 function buildSteps(night) {
-  S.steps = S.mode === "send" ? STEPS.send : night ? ["night", ...STEPS.recv] : STEPS.recv;
+  S.steps = S.mode === "send" ? STEPS.send
+    : night ? ["night", ...STEPS.recv.filter((k) => k !== "choose")] : STEPS.recv;
   S.stepIdx = -1; S.final = null;
   renderSteps();
 }
@@ -236,8 +269,11 @@ function renderDrop() {
     return;
   }
   d.classList.add("has");
+  const sel = sendSelection();
+  const files = sel ? `${sel.length} / ${S.source.files}` : S.source.files;
+  const bytes = sel ? S.pick.entries.filter((_, i) => S.pick.on.has(i)).reduce((a, e) => a + e.size, 0) : S.source.bytes;
   d.innerHTML = `<div class="path">${esc(S.source.path)}</div>
-    <div class="stats"><span>${esc(t("files_word"))} <b>${S.source.files}</b></span><span>${esc(t("size_word"))} <b>${fmtBytes(S.source.bytes)}</b></span></div>`;
+    <div class="stats"><span>${esc(t("files_word"))} <b>${files}</b></span><span>${esc(t("size_word"))} <b>${fmtBytes(bytes)}</b></span></div>`;
 }
 
 async function useSource(path) {
@@ -249,6 +285,8 @@ async function useSource(path) {
     S.source = null;
     log(t("read_fail") + " : " + e, "err");
   }
+  if (S.source?.folder && S.source.entries?.length > 1) openPicker("send", S.source.entries);
+  else closePicker();
   renderDrop(); renderGo();
 }
 
@@ -284,7 +322,7 @@ function renderGo() {
   const go = $("go");
   if (S.mode === "send") {
     go.textContent = t("create_link");
-    go.disabled = S.running || !S.source;
+    go.disabled = S.running || !S.source || (S.pick?.side === "send" && S.pick.on.size === 0);
   } else {
     go.textContent = $("nightOn")?.checked ? t("receive_night") : t("receive_now");
     go.disabled = S.running || !S.linkOk || !S.codeOk || !S.dest;
@@ -292,6 +330,150 @@ function renderGo() {
   go.classList.toggle("hidden", S.running);
   $("stop").classList.toggle("hidden", !S.running);
   $("modeSend").disabled = S.running; $("modeRecv").disabled = S.running;
+}
+
+// ------------------------------------------------------------------ Choix des fichiers
+// Même écran à l'envoi (avant de créer le lien) et à la réception (après le
+// code) : arbre du dossier, tout coché, filtres par type de fichier.
+
+const KINDS = [["Original", "kind_original"], ["Proxy", "kind_proxy"], ["Sidecar", "kind_sidecar"]];
+
+function openPicker(side, entries) {
+  S.pick = { side, entries, on: new Set(entries.map((_, i) => i)), open: new Set() };
+  $("idle").classList.add("hidden");
+  $("picker").classList.remove("hidden");
+  renderPicker();
+}
+function closePicker() {
+  S.pick = null;
+  $("picker").classList.add("hidden");
+  if (!S.running && $("status").classList.contains("hidden")) $("idle").classList.remove("hidden");
+}
+
+// Chemins choisis à l'envoi, ou null si tout le dossier part.
+function sendSelection() {
+  if (S.pick?.side !== "send" || S.pick.on.size === S.pick.entries.length) return null;
+  return S.pick.entries.filter((_, i) => S.pick.on.has(i)).map((e) => e.path);
+}
+
+// Arbre : { dirs: Map(nom -> nœud), files: [indice], all: [indices du sous-arbre] }
+function pickTree() {
+  const root = { dirs: new Map(), files: [], all: [] };
+  S.pick.entries.forEach((e, i) => {
+    const parts = e.path.split("/");
+    let node = root; node.all.push(i);
+    for (const part of parts.slice(0, -1)) {
+      if (!node.dirs.has(part)) node.dirs.set(part, { dirs: new Map(), files: [], all: [] });
+      node = node.dirs.get(part); node.all.push(i);
+    }
+    node.files.push(i);
+  });
+  return root;
+}
+
+function renderPicker() {
+  const p = S.pick;
+  if (!p) return;
+  const recv = p.side === "recv";
+  $("pickTitle").textContent = t(recv ? "pick_title_recv" : "pick_title_send");
+  $("pickHint").textContent = t(recv ? "pick_hint_recv" : "pick_hint_send");
+
+  // Filtres : tout, rien, puis un bouton par type présent.
+  const state = (idx) => {
+    const n = idx.filter((i) => p.on.has(i)).length;
+    return n === 0 ? "" : n === idx.length ? "on" : "part";
+  };
+  let tools = `<button class="tool" data-act="all">${esc(t("pick_all"))}</button><button class="tool" data-act="none">${esc(t("pick_none"))}</button>`;
+  for (const [kind, key] of KINDS) {
+    const idx = p.entries.map((e, i) => (e.kind === kind ? i : -1)).filter((i) => i >= 0);
+    if (idx.length) tools += `<button class="tool ${state(idx)}" data-kind="${kind}">${esc(t(key))}<em>${idx.length}</em></button>`;
+  }
+  $("pickTools").innerHTML = tools;
+
+  // Arbre.
+  const rows = [];
+  const walk = (node, prefix, depth) => {
+    for (const [name, child] of [...node.dirs].sort((a, b) => a[0].localeCompare(b[0]))) {
+      const path = prefix + name + "/";
+      const n = child.all.filter((i) => p.on.has(i)).length;
+      const size = child.all.reduce((a, i) => a + p.entries[i].size, 0);
+      const open = p.open.has(path);
+      rows.push(`<div class="row dir${n ? "" : " off"}" data-dir="${esc(path)}" style="padding-left:${10 + depth * 18}px">
+        <span class="tw">${open ? "▾" : "▸"}</span><input type="checkbox" data-mix="${n > 0 && n < child.all.length ? 1 : 0}" ${n ? "checked" : ""}>
+        <span class="nm">${esc(name)} <span class="kd">${n} / ${child.all.length}</span></span><span class="sz">${fmtBytes(size)}</span></div>`);
+      if (open) walk(child, path, depth + 1);
+    }
+    for (const i of node.files) {
+      const e = p.entries[i], on = p.on.has(i);
+      const kind = KINDS.find((k) => k[0] === e.kind);
+      rows.push(`<div class="row${on ? "" : " off"}" data-i="${i}" style="padding-left:${10 + depth * 18}px">
+        <span class="tw"></span><input type="checkbox" ${on ? "checked" : ""}>
+        <span class="nm" title="${esc(e.path)}">${esc(e.path.split("/").pop())}${kind ? `<span class="kd">${esc(t(kind[1] + "_one"))}</span>` : ""}</span><span class="sz">${fmtBytes(e.size)}</span></div>`);
+    }
+  };
+  S.pickRoot = pickTree();
+  walk(S.pickRoot, "", 0);
+  $("tree").innerHTML = rows.join("");
+  $("tree").querySelectorAll('input[data-mix="1"]').forEach((c) => (c.indeterminate = true));
+
+  // Résumé et bouton.
+  const bytes = [...p.on].reduce((a, i) => a + p.entries[i].size, 0);
+  $("pickSum").innerHTML = p.on.size
+    ? t("pick_summary", { n: `<b>${p.on.size}</b>`, total: p.entries.length, size: `<b>${esc(fmtBytes(bytes))}</b>` })
+    : esc(t("pick_empty"));
+  $("pickOk").classList.toggle("hidden", !recv);
+  $("pickOk").textContent = t("pick_confirm_recv");
+  $("pickOk").disabled = p.on.size === 0;
+  if (!recv) { renderDrop(); renderGo(); }
+}
+
+function pickSet(indices, on) {
+  for (const i of indices) on ? S.pick.on.add(i) : S.pick.on.delete(i);
+  renderPicker();
+}
+
+function dirNode(path) {
+  let node = S.pickRoot;
+  for (const part of path.split("/").filter(Boolean)) node = node.dirs.get(part);
+  return node;
+}
+
+function initPicker() {
+  $("pickTools").onclick = (ev) => {
+    const b = ev.target.closest(".tool");
+    if (!b || !S.pick) return;
+    const all = S.pick.entries.map((_, i) => i);
+    if (b.dataset.act === "all") return pickSet(all, true);
+    if (b.dataset.act === "none") return pickSet(all, false);
+    const idx = all.filter((i) => S.pick.entries[i].kind === b.dataset.kind);
+    pickSet(idx, !idx.every((i) => S.pick.on.has(i)));
+  };
+  $("tree").onclick = (ev) => {
+    const row = ev.target.closest(".row");
+    if (!row || !S.pick) return;
+    const box = ev.target.tagName === "INPUT";
+    if (row.dataset.dir) {
+      const path = row.dataset.dir;
+      if (box) {
+        const idx = dirNode(path).all;
+        pickSet(idx, !idx.every((i) => S.pick.on.has(i)));
+      } else {
+        S.pick.open.has(path) ? S.pick.open.delete(path) : S.pick.open.add(path);
+        renderPicker();
+      }
+    } else {
+      const i = Number(row.dataset.i);
+      pickSet([i], !S.pick.on.has(i));
+    }
+  };
+  $("pickOk").onclick = async () => {
+    if (!S.pick || S.pick.side !== "recv" || !S.pick.on.size) return;
+    const files = [...S.pick.on].sort((a, b) => a - b);
+    closePicker();
+    phase("ph_chosen");
+    try { await api.choose(files); }
+    catch (e) { phase("ph_error", null, { raw: String(e) }, "bad"); finish(false, t("banner_error"), String(e)); }
+  };
 }
 
 // ------------------------------------------------------------------ Panneau de droite
@@ -303,7 +485,14 @@ function renderIdle() {
 
 function resetRight() {
   ["status", "share", "banner", "prog", "cols"].forEach((id) => $(id).classList.add("hidden"));
-  $("idle").classList.remove("hidden");
+  // Le choix fait à l'envoi est gardé de côté quand on passe en réception.
+  if (S.pick?.side === "send" && S.mode !== "send") S.sendPick = S.pick;
+  if (S.pick && (S.pick.side === "recv" || S.mode !== "send")) closePicker();
+  if (S.mode === "send" && !S.pick && S.sendPick && !S.running) {
+    S.pick = S.sendPick; S.sendPick = null;
+    $("picker").classList.remove("hidden"); renderPicker();
+  }
+  $("idle").classList.toggle("hidden", !!S.pick);
   $("log").innerHTML = ""; $("files").innerHTML = "";
   $("prog").classList.remove("done");
   $("share").classList.remove("locked");
@@ -316,6 +505,7 @@ function resetRight() {
 
 function showWork() {
   $("idle").classList.add("hidden");
+  $("picker").classList.add("hidden");
   $("status").classList.remove("hidden");
   $("cols").classList.remove("hidden");
   $("files").classList.toggle("hidden", S.mode !== "recv");
@@ -395,6 +585,7 @@ function banner(ok, title, sub, actions) {
 
 function finish(ok, title, sub, actions) {
   S.running = false;
+  if (S.pick?.side === "recv") closePicker();
   if (ok) step("done");
   S.final = ok ? "ok" : "bad";
   renderSteps();
@@ -503,9 +694,20 @@ function onEvent(e) {
       log(t("ev_found", { s: num(e.seconds.toFixed(1)), path: pathLabel(e.path) }));
       break;
     case "manifest":
-      step("transfer");
       log(t("ev_code_ok"));
       log(t("ev_manifest", { name: e.name, n: e.files, size: fmtBytes(e.bytes), o: e.originals, p: e.proxies, s: e.sidecars }));
+      // En mode Noctiluca, tout est reçu sans écran de choix.
+      if (S.night) { step("transfer"); setChip("run", "chip_receiving"); startProgress(e.bytes); }
+      break;
+    case "choose":
+      step("choose");
+      phase("ph_choose", null, { key: "ph_choose_sub" });
+      setChip("wait", "chip_choosing");
+      openPicker("recv", e.files);
+      break;
+    case "chosen":
+      step("transfer");
+      log(t("ev_chosen", { n: e.files, size: fmtBytes(e.bytes) }));
       setChip("run", "chip_receiving");
       startProgress(e.bytes);
       break;
@@ -540,8 +742,10 @@ function onEvent(e) {
 
 async function go() {
   if (S.running) return;
+  const only = S.mode === "send" ? sendSelection() : null;
   resetRight();
   const night = S.mode === "recv" && $("nightOn").checked;
+  S.night = night;
   buildSteps(night);
   showWork();
   S.running = true; renderGo();
@@ -549,7 +753,7 @@ async function go() {
     if (S.mode === "send") {
       step("prepare"); phase("ph_preparing");
       setChip("run", "chip_preparing");
-      await api.send({ path: S.source.path, end_action: $("sendAfter").value });
+      await api.send({ path: S.source.path, only, end_action: $("sendAfter").value });
     } else {
       step(night ? "night" : "search");
       phase(night ? "ph_night_start" : "ph_searching", null, night ? null : { key: "ph_searching_sub" });
@@ -571,6 +775,7 @@ async function go() {
 async function stop() {
   await api.cancel();
   S.running = false;
+  if (S.pick?.side === "recv") closePicker();
   S.final = "bad"; renderSteps();
   const key = S.mode === "recv" ? "ph_cancel_recv" : "ph_cancel_send";
   phase(key, null, null, "idle");
@@ -655,6 +860,7 @@ function init() {
   $("copyCode").onclick = (ev) => copy($("shareCode").textContent, ev.target);
   $("newCode").onclick = () => api.newCode().catch((e) => log(String(e), "err"));
 
+  initPicker();
   api.onEvent(onEvent);
   applyLang();
   renderNight();

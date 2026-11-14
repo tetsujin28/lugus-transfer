@@ -27,6 +27,8 @@ type SessionResult = Result<(), String>;
 struct Running {
     task: tauri::async_runtime::JoinHandle<()>,
     commands: Option<mpsc::UnboundedSender<SenderCommand>>,
+    /// Réception : fichiers choisis par l'utilisateur.
+    choices: Option<mpsc::UnboundedSender<Vec<u32>>>,
 }
 
 #[derive(Default)]
@@ -40,6 +42,17 @@ struct PathSummary {
     name: String,
     files: usize,
     bytes: u64,
+    /// `true` pour un dossier : l'interface propose alors de choisir les fichiers.
+    folder: bool,
+    entries: Vec<EntryInfo>,
+}
+
+/// Un fichier du dossier, pour l'écran de choix.
+#[derive(serde::Serialize)]
+struct EntryInfo {
+    path: String,
+    size: u64,
+    kind: lugus_core::protocol::FileKind,
 }
 
 /// Choix d'un dossier, en partant du dernier dossier choisi.
@@ -68,11 +81,22 @@ async fn pick_file(app: AppHandle) -> Option<String> {
 #[tauri::command]
 async fn scan_path(path: String) -> Result<PathSummary, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        let manifest = lugus_store::scan(&PathBuf::from(&path)).map_err(|e| e.to_string())?;
+        let source = PathBuf::from(&path);
+        let manifest = lugus_store::scan(&source).map_err(|e| e.to_string())?;
         Ok(PathSummary {
             name: manifest.name.clone(),
             files: manifest.files.len(),
             bytes: manifest.total_bytes(),
+            folder: source.is_dir(),
+            entries: manifest
+                .files
+                .iter()
+                .map(|f| EntryInfo {
+                    path: f.path.clone(),
+                    size: f.size,
+                    kind: f.kind,
+                })
+                .collect(),
             path,
         })
     })
@@ -110,6 +134,7 @@ fn launch<F>(
     app: AppHandle,
     state: State<AppState>,
     commands: Option<mpsc::UnboundedSender<SenderCommand>>,
+    choices: Option<mpsc::UnboundedSender<Vec<u32>>>,
     session: F,
 ) -> Result<(), String>
 where
@@ -132,7 +157,11 @@ where
             }
         }
     });
-    *running = Some(Running { task, commands });
+    *running = Some(Running {
+        task,
+        commands,
+        choices,
+    });
     Ok(())
 }
 
@@ -140,7 +169,7 @@ where
 fn start_send(app: AppHandle, state: State<AppState>, options: SendOptions) -> Result<(), String> {
     let (commands, receiver) = mpsc::unbounded_channel();
     let emit = emitter(&app);
-    launch(app, state, Some(commands), async move {
+    launch(app, state, Some(commands), None, async move {
         run_sender(options, emit, receiver)
             .await
             .map_err(|e| format!("{e:#}"))
@@ -154,11 +183,24 @@ fn start_receive(
     options: ReceiveOptions,
 ) -> Result<(), String> {
     let emit = emitter(&app);
-    launch(app, state, None, async move {
-        run_receiver(options, emit)
+    let (choices, picked) = mpsc::unbounded_channel();
+    launch(app, state, None, Some(choices), async move {
+        run_receiver(options, emit, Some(picked))
             .await
             .map_err(|e| format!("{e:#}"))
     })
+}
+
+/// Fichiers choisis pour la réception en cours (indices dans le contenu proposé).
+#[tauri::command]
+fn choose_files(state: State<AppState>, files: Vec<u32>) -> Result<(), String> {
+    let running = state.running.lock().map_err(|e| e.to_string())?;
+    match running.as_ref().and_then(|r| r.choices.as_ref()) {
+        Some(choices) => choices
+            .send(files)
+            .map_err(|_| "aucune réception en attente de choix".to_string()),
+        None => Err("aucune réception en cours".into()),
+    }
 }
 
 /// Nouveau code pour l'envoi en cours (le lien ne change pas).
@@ -212,6 +254,7 @@ fn main() {
             start_send,
             start_receive,
             new_code,
+            choose_files,
             cancel,
             open_path,
             reveal_path

@@ -48,9 +48,20 @@ pub struct Source {
 
 impl Source {
     pub fn new(path: &Path) -> std::io::Result<Self> {
+        Self::with_selection(path, None)
+    }
+
+    /// Comme `new`, en ne proposant que les chemins `only` (relatifs au dossier,
+    /// séparateur `/`) s'ils sont donnés.
+    pub fn with_selection(path: &Path, only: Option<&[String]>) -> std::io::Result<Self> {
+        let manifest = lugus_store::scan(path)?;
+        let manifest = match only {
+            Some(only) => lugus_store::keep_only(manifest, only)?,
+            None => manifest,
+        };
         Ok(Self {
             root: lugus_store::source_root(path)?,
-            manifest: lugus_store::scan(path)?,
+            manifest,
         })
     }
 

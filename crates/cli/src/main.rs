@@ -77,6 +77,7 @@ async fn main() -> Result<()> {
             run_sender(
                 SendOptions {
                     path,
+                    only: None,
                     end_action: apres,
                 },
                 emit,
@@ -106,6 +107,7 @@ async fn main() -> Result<()> {
                     end_action: apres,
                 },
                 printer(None),
+                None,
             )
             .await
         }
@@ -214,6 +216,11 @@ fn printer(commands: Option<mpsc::UnboundedSender<SenderCommand>>) -> Emit {
             println!(
                 "  {originals} original(aux), {proxies} proxy(s), {sidecars} fichier(s) annexe(s)"
             );
+        }
+        // La ligne de commande reçoit tout : pas d'écran de choix.
+        Event::Choose { .. } => {}
+        Event::Chosen { files, bytes } => {
+            eprintln!("{files} fichier(s) choisi(s), {}", human(bytes))
         }
         Event::FileVerified { .. } => {}
         Event::Received {
