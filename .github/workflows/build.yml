@@ -8,6 +8,11 @@ on:
   release:
     types: [published]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release existante à compléter (ex. v0.1.0), vide pour un simple test"
+        required: false
+        default: ""
 
 permissions:
   contents: write
@@ -78,13 +83,14 @@ jobs:
         run: cp target/release/lugus-app.exe "dist/Lugus_Transfer_$(grep -m1 '"version"' src-tauri/tauri.conf.json | cut -d'"' -f4)_portable.exe"
       # GitHub remplace les espaces des noms de fichiers par des points : on les
       # remplace nous-mêmes par des tirets bas (Lugus_Transfer_0.1.0_x64-setup.exe).
+      # find plutôt que globstar : le bash de macOS (3.2) ne le connaît pas.
       - name: Rassembler les fichiers
         shell: bash
         run: |
-          shopt -s globstar nullglob
-          for f in target/**/release/bundle/**/*.msi target/**/release/bundle/**/*-setup.exe target/**/release/bundle/**/*.dmg; do
-            cp "$f" "dist/$(basename "$f" | tr ' ' '_')"
-          done
+          find target -path '*release/bundle/*' -type f \( -name '*.msi' -o -name '*-setup.exe' -o -name '*.dmg' \) -print0 |
+            while IFS= read -r -d '' f; do
+              cp "$f" "dist/$(basename "$f" | tr ' ' '_')"
+            done
           ls -l dist
 
       - uses: actions/upload-artifact@v4
@@ -93,7 +99,8 @@ jobs:
           path: dist/*
 
       - name: Attacher à la Release
-        if: github.event_name == 'release'
+        if: github.event_name == 'release' || inputs.tag != ''
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ github.event_name == 'release' && github.event.release.tag_name || inputs.tag }}
           files: dist/*
