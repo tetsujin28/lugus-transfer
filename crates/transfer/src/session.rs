@@ -122,6 +122,10 @@ pub enum Event {
         seconds: u64,
     },
     Searching,
+    /// L'émetteur n'a pas encore été trouvé, nouvel essai (numéro `attempt`).
+    SearchRetry {
+        attempt: u32,
+    },
     Found {
         seconds: f32,
         path: String,
@@ -611,9 +615,14 @@ pub async fn run_receiver(
     emit(Event::Searching);
     let beacon = Beacon::bind(Role::Receiver).await?;
     let started = Instant::now();
-    let conn = tokio::time::timeout(CONNECT_TIMEOUT, beacon.connect(&link))
-        .await
-        .context("émetteur introuvable dans le délai imparti")??;
+    let conn = {
+        let emit = emit.clone();
+        beacon
+            .connect_patiently(&link, CONNECT_TIMEOUT, move |attempt| {
+                emit(Event::SearchRetry { attempt })
+            })
+            .await?
+    };
     if remote_key(&conn) != *link.key() {
         bail!("la machine jointe n'est pas celle du lien");
     }

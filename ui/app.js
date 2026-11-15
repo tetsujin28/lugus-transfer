@@ -721,6 +721,10 @@ function onEvent(e) {
       phase("ph_searching", null, { key: "ph_searching_sub" });
       log(t("ev_searching")); setChip("run", "chip_searching");
       break;
+    case "search_retry":
+      phase("ph_search_retry", { n: e.attempt }, { key: "ph_searching_sub_retry" });
+      if (e.attempt === 2 || e.attempt % 5 === 0) log(t("ev_search_retry", { n: e.attempt }), "dim");
+      break;
     case "found":
       step("code");
       phase("ph_found", { path: pathLabel(e.path) });

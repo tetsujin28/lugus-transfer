@@ -93,6 +93,7 @@ const I18N = {
     ph_choose_sub: "Ce que tu ne prends pas maintenant pourra être reçu plus tard avec le même lien et le même code.",
     ph_chosen: "Sélection envoyée à l'expéditeur, démarrage du transfert…",
     ev_chosen: "{n} fichier(s) choisi(s), {size}.",
+    ph_search_retry: "Expéditeur pas encore trouvé, nouvel essai ({n})…", ph_searching_sub_retry: "Normal juste après la création du lien : Lugus réessaie tout seul pendant 90 s.", ev_search_retry: "Expéditeur pas encore trouvé dans le réseau, nouvel essai ({n}).",
     units: ["o", "Ko", "Mo", "Go", "To"], dec: ",",
   },
 
@@ -187,6 +188,7 @@ const I18N = {
     ph_choose_sub: "What you leave out now can be received later with the same link and code.",
     ph_chosen: "Selection sent to the sender, starting the transfer…",
     ev_chosen: "{n} file(s) chosen, {size}.",
+    ph_search_retry: "Sender not found yet, trying again ({n})…", ph_searching_sub_retry: "Normal right after the link is created: Lugus keeps trying on its own for 90 s.", ev_search_retry: "Sender not found on the network yet, trying again ({n}).",
     units: ["B", "KB", "MB", "GB", "TB"], dec: ".",
   },
 
@@ -281,6 +283,7 @@ const I18N = {
     ph_choose_sub: "Lo que no recibas ahora podrás recibirlo más tarde con el mismo enlace y el mismo código.",
     ph_chosen: "Selección enviada al remitente, iniciando la transferencia…",
     ev_chosen: "{n} archivo(s) elegido(s), {size}.",
+    ph_search_retry: "Remitente aún no encontrado, nuevo intento ({n})…", ph_searching_sub_retry: "Normal justo después de crear el enlace: Lugus lo reintenta solo durante 90 s.", ev_search_retry: "Remitente aún no encontrado en la red, nuevo intento ({n}).",
     units: ["B", "KB", "MB", "GB", "TB"], dec: ",",
   },
 };

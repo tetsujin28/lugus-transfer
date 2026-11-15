@@ -19,7 +19,7 @@ use std::fmt;
 use std::net::IpAddr;
 use std::time::Duration;
 
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use iroh::address_lookup::{AddrFilter, AddressLookup};
 use iroh::endpoint::presets;
 pub use iroh::endpoint::{Connection, RecvStream, SendStream};
@@ -29,6 +29,9 @@ use lugus_core::link::LugusLink;
 use lugus_core::protocol::Message;
 use lugus_core::{wire, ALPN};
 use n0_future::StreamExt;
+
+/// Délai entre deux recherches de l'émetteur dans la DHT.
+const RETRY_DELAY: Duration = Duration::from_secs(3);
 
 /// Convertit une erreur iroh ou QUIC en `anyhow::Error`, en gardant son message.
 ///
@@ -169,6 +172,38 @@ impl Beacon {
     pub async fn connect(&self, link: &LugusLink) -> Result<Connection> {
         let remote = PublicKey::from_bytes(link.key()).map_err(net_err)?;
         self.endpoint.connect(remote, ALPN).await.map_err(net_err)
+    }
+
+    /// Comme `connect`, en réessayant jusqu'à `timeout`. iroh abandonne dès
+    /// qu'une recherche dans la DHT ne trouve rien (« No addressing information
+    /// available ») : c'est fréquent juste après la publication du lien, ou
+    /// quand la DHT répond mal sur le moment. `on_retry` est appelé avant
+    /// chaque nouvel essai, avec son numéro.
+    pub async fn connect_patiently(
+        &self,
+        link: &LugusLink,
+        timeout: Duration,
+        mut on_retry: impl FnMut(u32),
+    ) -> Result<Connection> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        let mut attempt = 1u32;
+        loop {
+            let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let last = match tokio::time::timeout(left, self.connect(link)).await {
+                Ok(Ok(conn)) => return Ok(conn),
+                Ok(Err(err)) => err,
+                Err(_) => bail!("émetteur introuvable dans le délai imparti"),
+            };
+            if tokio::time::Instant::now() + RETRY_DELAY >= deadline {
+                return Err(last.context(
+                    "émetteur introuvable : vérifie que Lugus est toujours ouvert chez \
+                     l'expéditeur et que le lien est le bon",
+                ));
+            }
+            tokio::time::sleep(RETRY_DELAY).await;
+            attempt += 1;
+            on_retry(attempt);
+        }
     }
 
     /// Ferme proprement l'endpoint et ses connexions.

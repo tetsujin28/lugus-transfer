@@ -200,6 +200,9 @@ fn printer(commands: Option<mpsc::UnboundedSender<SenderCommand>>) -> Emit {
             seconds.div_ceil(60)
         ),
         Event::Searching => eprintln!("Recherche de l'émetteur dans la DHT…"),
+        Event::SearchRetry { attempt } => {
+            eprintln!("Émetteur pas encore trouvé, nouvel essai ({attempt})…")
+        }
         Event::Found { seconds, path } => {
             eprintln!("Émetteur trouvé en {seconds:.1} s ({}).", path_label(&path))
         }
