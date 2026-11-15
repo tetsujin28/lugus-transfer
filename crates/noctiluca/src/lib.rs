@@ -17,9 +17,10 @@
 
 use std::fmt;
 use std::net::IpAddr;
+use std::time::Duration;
 
-use anyhow::{anyhow, Result};
-use iroh::address_lookup::AddrFilter;
+use anyhow::{anyhow, bail, Result};
+use iroh::address_lookup::{AddrFilter, AddressLookup};
 use iroh::endpoint::presets;
 pub use iroh::endpoint::{Connection, RecvStream, SendStream};
 use iroh::{Endpoint, PublicKey, RelayMode, SecretKey, TransportAddr};
@@ -27,6 +28,10 @@ use iroh_mainline_address_lookup::DhtAddressLookup;
 use lugus_core::link::LugusLink;
 use lugus_core::protocol::Message;
 use lugus_core::{wire, ALPN};
+use n0_future::StreamExt;
+
+/// Délai entre deux recherches de l'émetteur dans la DHT.
+const RETRY_DELAY: Duration = Duration::from_secs(3);
 
 /// Convertit une erreur iroh ou QUIC en `anyhow::Error`, en gardant son message.
 ///
@@ -55,6 +60,18 @@ pub enum PathKind {
     Relay,
     /// Aucun chemin sélectionné pour l'instant.
     Unknown,
+}
+
+impl PathKind {
+    /// Identifiant stable, pour l'interface : `local`, `direct`, `relay`, `unknown`.
+    pub fn code(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Direct => "direct",
+            Self::Relay => "relay",
+            Self::Unknown => "unknown",
+        }
+    }
 }
 
 impl fmt::Display for PathKind {
@@ -157,6 +174,38 @@ impl Beacon {
         self.endpoint.connect(remote, ALPN).await.map_err(net_err)
     }
 
+    /// Comme `connect`, en réessayant jusqu'à `timeout`. iroh abandonne dès
+    /// qu'une recherche dans la DHT ne trouve rien (« No addressing information
+    /// available ») : c'est fréquent juste après la publication du lien, ou
+    /// quand la DHT répond mal sur le moment. `on_retry` est appelé avant
+    /// chaque nouvel essai, avec son numéro.
+    pub async fn connect_patiently(
+        &self,
+        link: &LugusLink,
+        timeout: Duration,
+        mut on_retry: impl FnMut(u32),
+    ) -> Result<Connection> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        let mut attempt = 1u32;
+        loop {
+            let left = deadline.saturating_duration_since(tokio::time::Instant::now());
+            let last = match tokio::time::timeout(left, self.connect(link)).await {
+                Ok(Ok(conn)) => return Ok(conn),
+                Ok(Err(err)) => err,
+                Err(_) => bail!("émetteur introuvable dans le délai imparti"),
+            };
+            if tokio::time::Instant::now() + RETRY_DELAY >= deadline {
+                return Err(last.context(
+                    "émetteur introuvable : vérifie que Lugus est toujours ouvert chez \
+                     l'expéditeur et que le lien est le bon",
+                ));
+            }
+            tokio::time::sleep(RETRY_DELAY).await;
+            attempt += 1;
+            on_retry(attempt);
+        }
+    }
+
     /// Ferme proprement l'endpoint et ses connexions.
     pub async fn close(self) {
         self.endpoint.close().await;
@@ -206,6 +255,30 @@ pub async fn recv_msg(stream: &mut RecvStream, max_len: usize) -> Result<Message
     let mut body = vec![0u8; len];
     stream.read_exact(&mut body).await.map_err(net_err)?;
     Ok(wire::decode(&body)?)
+}
+
+/// Attend que le lien de `key` soit réellement trouvable dans la DHT, en le
+/// cherchant avec un client distinct, comme le fera le destinataire.
+/// Renvoie `false` si rien n'est trouvé avant `timeout`.
+pub async fn wait_until_published(key: [u8; 32], timeout: Duration) -> Result<bool> {
+    let id = PublicKey::from_bytes(&key).map_err(net_err)?;
+    let lookup = DhtAddressLookup::builder()
+        .no_publish()
+        .build()
+        .map_err(net_err)?;
+    let search = async {
+        loop {
+            if let Some(mut found) = lookup.resolve(id) {
+                while let Some(item) = found.next().await {
+                    if item.is_ok() {
+                        return true;
+                    }
+                }
+            }
+            tokio::time::sleep(Duration::from_secs(3)).await;
+        }
+    };
+    Ok(tokio::time::timeout(timeout, search).await.unwrap_or(false))
 }
 
 /// Chemin actuellement sélectionné par la connexion.

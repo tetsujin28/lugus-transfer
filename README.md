@@ -1,102 +1,122 @@
-# Lugus Transfer
+<p align="center">
+  <img src="src-tauri/icons/128x128.png" width="96" alt="Lugus Transfer logo">
+</p>
 
-Transfert pair à pair de très gros fichiers vidéo, sans serveur à maintenir.
+<h1 align="center">Lugus Transfer</h1>
+<p align="center"><b>by Domingo Olmo Martin</b></p>
+<p align="center">
+  <b>English</b> · <a href="README.fr.md">Français</a> · <a href="README.es.md">Español</a>
+</p>
 
-L'émetteur partage un lien (`lugus://r/<clé>`) et un code (`4821-lanterne-7`).
-Le récepteur clique sur le lien, tape le code, et les fichiers arrivent en direct
-d'une machine à l'autre, chiffrés de bout en bout et vérifiés par blocs.
+Lugus Transfer sends footage straight from one computer to another, with a link and a code. No server to run, no cloud storage, no account. Every file is read back from the recipient's disk and compared with the source, and an MHL is written on arrival.
 
-Lugus est le dieu messager des Celtibères. Noctiluca, la déesse lunaire de la
-côte tartessienne, donne son nom au module de découverte réseau.
+Free, for Windows and macOS. Interface in English, French and Spanish.
 
-## État
+> Lugus is the messenger god of the Celtiberians, god of roads and exchanges. Noctiluca, the moon goddess of the Tartessian coast, lights the way and watches over overnight transfers.
 
-Étape 3 : découverte par la DHT, authentification par code, puis transfert
-complet des fichiers avec reprise et vérification par relecture du disque.
-L'interface Tauri et le MHL viendront ensuite.
+<p align="center"><img src="docs/screenshots/link_en.webp" width="860" alt="Link and code ready to send"></p>
 
-| Crate | Rôle | État |
-|---|---|---|
-| `core` | lien, code (Damm), limiteur d'essais, messages, encodage | écrit, non compilé |
-| `noctiluca` | découverte par la DHT, endpoint iroh, trames, chemin utilisé | écrit, non compilé |
-| `auth` | SPAKE2 lié à la connexion, étiquettes de confirmation | écrit, non compilé |
-| `store` | manifeste, réception par blocs, journal de reprise, liste `b3sum` | écrit, non compilé |
-| `transfer` | service des fichiers, réception parallèle, accusé de réception | écrit, non compilé |
-| `cli` | binaire `lugus` (`send`, `receive`, `code`) | écrit, non compilé |
+## Download
 
-## Transfert et intégrité
+Go to the **[Releases page](https://github.com/tetsujin28/lugus-transfer/releases)** and pick the file for your computer:
 
-- Blocs de 4 Mio. L'émetteur calcule le BLAKE3 de chaque bloc et du fichier
-  entier pendant la lecture, et les envoie avec les données.
-- Le récepteur écrit dans `<fichier>.lugus-part` et note le hash de chaque bloc
-  dans `<fichier>.lugus-journal`. Après une coupure, il suffit de relancer
-  `lugus receive` avec le même lien et le même code : la réception reprend au
-  dernier bloc écrit. L'émetteur reste en attente pendant ce temps.
-- À la fin de chaque fichier, il est **relu depuis le disque** : chaque bloc et
-  le hash complet sont comparés à ceux de la source. Le fichier reçoit ensuite
-  la date de modification d'origine et prend son nom définitif.
-- Un fichier déjà présent à destination avec la bonne taille est hashé et
-  comparé à la source au lieu d'être téléchargé.
-- 4 fichiers en parallèle par défaut (`--parallel`), proxys et fichiers annexes
-  avant les originaux.
-- À la fin, `<nom>.lugus.b3` liste les hash (vérifiable avec `b3sum --check`).
-  Le récepteur envoie un accusé contenant l'empreinte de cette liste,
-  authentifié avec la clé de session.
-- Le MHL (ASC MHL) viendra plus tard : il n'accepte pas BLAKE3 et demandera un
-  hash xxHash en plus.
+| System | File |
+|---|---|
+| Windows (no install) | `Lugus_Transfer_x.y.z_portable.exe` |
+| Windows (installer) | `Lugus_Transfer_x.y.z_x64-setup.exe` or `.msi` |
+| macOS (Intel and Apple Silicon) | `Lugus_Transfer_x.y.z_universal.dmg` |
+| Command line (optional) | `lugus_x.y.z_windows.exe`, `lugus_x.y.z_macos` |
 
-## Règles du code d'accès
+Both computers need Lugus Transfer. The sender and the recipient do not need the same system: a Mac can send to a PC and the other way round.
 
-- Format : `NNNN-mot-C` (4 chiffres, un mot de la liste, un chiffre de contrôle).
-- Chiffre de contrôle de Damm : toute erreur sur un chiffre et toute inversion
-  de deux chiffres voisins sont repérées en local, sans consommer d'essai.
-- 3 essais par lien, tous destinataires confondus, avec un délai croissant.
-  Chaque essai est réservé dès son début : abandonner en cours de route le
-  consomme quand même.
-- Après 3 échecs, seul le code est régénéré, le lien reste valable.
+**First launch.** The app is not signed yet, so your system will warn you once:
+- **Windows**: click "More info", then "Run anyway".
+- **macOS**: right-click the app, choose "Open", then confirm.
 
-## Authentification
+Your browser may also flag the download as unusual or dangerous: this is common for new, unsigned apps. Keep the file from the downloads panel, and if in doubt, check it on [VirusTotal](https://www.virustotal.com). If your system asks whether Lugus Transfer may use the network, allow it: that is how the two computers reach each other.
 
-1. récepteur → `Hello`, puis `Pake` (SPAKE2, côté B)
-2. émetteur → `Pake` (côté A), après avoir réservé un essai
-3. récepteur → `Confirm` : sa preuve
-4. émetteur → `Confirm` s'il a vérifié la preuve, sinon `Error(WrongCode)`
-5. émetteur → `Manifest`, récepteur → `Select`
-6. un flux par fichier : `Request`, puis `Block` + données, puis `FileDone`
-7. récepteur → `Receipt`
+## What it does
 
-L'échange est lié à la connexion : identités SPAKE2 = clés iroh des deux pairs,
-et clé dérivée avec un secret exporté de la session TLS (RFC 5705).
-L'émetteur ne révèle sa preuve qu'après avoir vérifié celle du récepteur.
+- **Direct transfer.** The files go from one computer to the other and are stored nowhere else. Both computers must be on and running Lugus Transfer at the same time.
+- **A link and a code.** The sender creates a link (`lugus://r/…`) and a short code such as `4821-lanterne-7`, to send through two different channels. The link is valid for 24 hours, with 3 attempts per code.
+- **Choose what you send, choose what you receive.** Drop a folder, one file or several files. Untick what should not go, then the recipient unticks what they do not need right now (originals, proxies, sidecar files, or file by file).
+- **Proxies first.** Proxies and sidecar files arrive before the originals, so the editor can start sooner.
+- **Verified on the recipient's disk.** Each file is read back from the destination disk with the system cache bypassed, and compared block by block, then as a whole, with the hash of the source (BLAKE3). A file only gets its final name once it is verified.
+- **Resumes exactly where it stopped.** After a network cut, a closed window or a computer gone to sleep, start the reception again: every block already written and checked is kept, and both screens show the same progress.
+- **MHL on arrival.** An MHL 1.1 file in xxHash64 is written in the received folder, readable by [Bandua MHL Companion](https://github.com/tetsujin28/bandua-mhl-companion), Silverstack, ShotPut Pro, Hedge…
+- **Delivery receipt.** The sender is told when everything has been received and verified on the other side.
+- **Clear at every step.** Numbered steps and a status line say what is happening and what to do, including during the final checks after 100 %.
+- **Keeps the computer awake** during the whole transfer.
+- **Noctiluca mode.** Schedule the reception for the night (01:00 for example), then put the computer to sleep or shut it down once everything is verified.
+- **Encrypted end to end.** Even when the transfer goes through a public relay, nobody but the two computers can read the files.
 
-## Connectivité
+## How to use it
 
-- Découverte : DHT Mainline uniquement (`iroh-mainline-address-lookup`), aucun
-  serveur DNS iroh.link.
-- Ports : ouverture automatique par iroh (UPnP, PCP, NAT-PMP).
-- Hole punching : coordonné par les relais publics d'iroh, qui servent aussi de
-  repli. Le trafic y reste chiffré de bout en bout.
+**To send**
+1. Drop a folder or files on the window, or use **Choose a folder** / **Choose files**.
+2. Untick what you do not want to send, then click **Create the link**.
+3. Send the **link** and the **code** to the recipient, through two different channels (email and text message, for example).
+4. Leave Lugus Transfer open until **DELIVERED AND VERIFIED**.
 
-## Développement
+**To receive**
+1. Paste the link, type the code and choose the destination folder.
+2. Click **Receive**, then choose the files you want and click **Receive the selection**.
+3. Wait for **RECEIVED AND VERIFIED**. The MHL is in the received folder.
 
-Rust 1.91 au minimum (exigé par iroh 1.4).
-Pas de compilation automatique : le projet est compilé à la main, sur demande.
+The **[full user guide](docs/GUIDE.md)** walks through every screen, the Noctiluca mode, interruptions and what to do when something goes wrong.
 
-```
-cargo build --release
-```
+## Screenshots
 
-Tests unitaires (sans réseau) : `cargo test`.
+<table>
+  <tr>
+    <td width="50%"><img src="docs/screenshots/choose_en.webp" alt="Choosing the files to receive"><br><sub>Choosing the files to receive</sub></td>
+    <td width="50%"><img src="docs/screenshots/received_en.webp" alt="Received and verified"><br><sub>Received and verified</sub></td>
+  </tr>
+</table>
 
-Test de l'étape 3, sur deux machines :
+## Under the hood
+
+- **Discovery**: the sender publishes its addresses, signed with a one-time key, in the BitTorrent Mainline DHT. No server to maintain.
+- **Connection**: QUIC ([iroh](https://www.iroh.computer)), direct whenever possible (local network, IPv6, ports opened automatically with UPnP, PCP or NAT-PMP, hole punching). Otherwise, falls back on iroh's public relays, where traffic stays encrypted end to end.
+- **Code**: `NNNN-word-C`, 4 digits, one word out of 2048 and a check digit (Damm algorithm). Typos are caught on the recipient's computer, without using up an attempt. 3 attempts per code, with a growing delay between attempts. After 3 failures, only the code is replaced, the link stays the same.
+- **Authentication**: SPAKE2, bound to the keys of both computers and to the TLS session. The sender only proves it knows the code after checking the recipient's proof.
+- **Transfer**: 4 MiB blocks, 4 files in parallel. Each block is checked against its hash before being written, and logged in a journal (`.lugus-journal`) used to resume.
+- **Verification**: files are written as `.lugus-part`, read back without the system cache (`FILE_FLAG_NO_BUFFERING`, `F_NOCACHE`, `posix_fadvise`), compared block by block and as a whole with the BLAKE3 hash of the source, then given their original date and final name.
+
+## Command line
+
+The `lugus` tool does the same as the app, for scripts or a computer without a screen:
 
 ```
-lugus send <fichier ou dossier>                             # affiche le lien et le code
-lugus receive lugus://r/<clé> --code <code> --dest <dossier>  # reçoit et vérifie
+lugus send <file or folder> [--apres veille|extinction]
+lugus receive <link> --code <code> --dest <folder> [--depart 01:00] [--apres veille|extinction]
+lugus code [code to check]
 ```
 
-Pour tester la reprise, interrompez `receive` (Ctrl+C) en cours de route, puis
-relancez la même commande.
+## Build from source
 
-Pour tester la règle des essais, lancez `receive` avec un code valide mais
-différent (par exemple généré par `lugus code`).
+Requires [Rust](https://rustup.rs) 1.91 or later. No npm needed.
+
+```
+cargo test --workspace --exclude lugus-app
+cargo install tauri-cli --version "^2" --locked
+cd src-tauri
+cargo tauri dev      # run
+cargo tauri build    # build installers
+```
+
+Every published Release builds the Windows and macOS files automatically with GitHub Actions.
+
+Project layout: `crates/` (engine in Rust: link and code, network, authentication, storage and verification, transfer, command line), `src-tauri/` (desktop app), `ui/` (interface, plain HTML/CSS/JS). Opened in a browser, `ui/index.html` runs in demo mode with simulated data.
+
+## Sister apps
+
+- [Bandua](https://github.com/tetsujin28/bandua): offload camera cards and verify every copy.
+- [Bandua MHL Companion](https://github.com/tetsujin28/bandua-mhl-companion): check received footage against its MHL.
+- [Ataecina](https://github.com/tetsujin28/ataecina): recover and repair lost footage.
+
+## License and disclaimer
+
+© 2026 Domingo Olmo Martin. Released under the [MIT License](LICENSE).
+
+Lugus Transfer is provided "as is", without any warranty. It helps you transfer and verify media but does not replace your own checks and backup procedures. The author cannot be held responsible for any loss or corruption of data, or for any damage resulting from the use of the software. **Never delete the original before checking that the received copy is complete and readable.**

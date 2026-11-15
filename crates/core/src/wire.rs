@@ -80,6 +80,10 @@ mod tests {
             hash: [1u8; 32],
         });
         roundtrip(Message::FileDone { full_hash: None });
+        roundtrip(Message::Status {
+            received: 10,
+            verified: 4,
+        });
     }
 
     #[test]

@@ -1,14 +1,13 @@
 //! Fichiers et intégrité.
 //!
 //! - construction du manifeste à partir d'un fichier ou d'un dossier ;
-//! - réception par blocs avec reprise et vérification par relecture
-//!   (module `incoming`) ;
-//! - liste des hash au format `b3sum`, vérifiable avec `b3sum --check`.
-//!
-//! Le MHL (ASC MHL) viendra plus tard : il n'accepte pas BLAKE3 et demandera un
-//! hash xxHash calculé en plus.
+//! - réception par blocs avec reprise et vérification par relecture sans cache
+//!   (modules `incoming` et `rawio`) ;
+//! - MHL 1.1 en xxHash64 (module `mhl`), comme Bandua.
 
 pub mod incoming;
+pub mod mhl;
+pub mod rawio;
 
 use std::fmt::Write as _;
 use std::fs;
@@ -20,7 +19,7 @@ use lugus_core::protocol::{FileEntry, FileKind, Hash, Manifest};
 
 /// Où écrire les fichiers reçus.
 pub struct Layout {
-    /// Dossier racine des chemins du manifeste.
+    /// Dossier racine des chemins du manifeste (et dossier du MHL).
     pub base: PathBuf,
     /// Préfixe à ajouter aux chemins pour les exprimer depuis la destination.
     pub prefix: String,
@@ -72,23 +71,26 @@ pub fn source_path(root: &Path, entry: &FileEntry) -> PathBuf {
     path
 }
 
-/// Écrit `dest/<nom>.lugus.b3` au format `b3sum` (`hash  chemin`, chemins relatifs
-/// à `dest`). Renvoie le chemin du fichier et le BLAKE3 de son contenu.
-pub fn write_hash_list(
-    dest: &Path,
-    manifest_name: &str,
-    prefix: &str,
-    hashes: &[(String, Hash)],
-) -> io::Result<(PathBuf, Hash)> {
+/// Liste canonique des hash BLAKE3 (`hash  chemin`, triée par chemin) et son
+/// propre BLAKE3, qui sert d'empreinte à l'accusé de réception.
+pub fn hash_list(hashes: &[(String, Hash)]) -> (String, Hash) {
     let mut sorted: Vec<&(String, Hash)> = hashes.iter().collect();
     sorted.sort_by(|a, b| a.0.cmp(&b.0));
     let mut content = String::new();
     for (path, hash) in sorted {
-        let _ = writeln!(content, "{}  {prefix}{path}", hex(hash));
+        let _ = writeln!(content, "{}  {path}", hex(hash));
     }
-    let list_path = dest.join(format!("{manifest_name}.lugus.b3"));
-    fs::write(&list_path, content.as_bytes())?;
-    Ok((list_path, *blake3::hash(content.as_bytes()).as_bytes()))
+    let digest = *blake3::hash(content.as_bytes()).as_bytes();
+    (content, digest)
+}
+
+/// Nom du MHL écrit par Lugus, distinct de celui de Bandua pour ne jamais
+/// écraser un MHL déjà présent dans le dossier reçu.
+pub fn mhl_file_name(manifest_name: &str, when: &chrono::DateTime<chrono::Local>) -> String {
+    format!(
+        "{manifest_name}_lugus_{}.mhl",
+        when.format("%Y-%m-%d_%H%M%S")
+    )
 }
 
 /// Hash en hexadécimal minuscule.
@@ -106,7 +108,14 @@ const MEDIA_EXTENSIONS: &[&str] = &[
 ];
 
 /// Noms de fichiers système à ignorer.
-const IGNORED_NAMES: &[&str] = &["Thumbs.db", "desktop.ini"];
+/// Fichiers et dossiers système à ignorer (y compris à la racine d'un disque Windows).
+const IGNORED_NAMES: &[&str] = &[
+    "Thumbs.db",
+    "desktop.ini",
+    "System Volume Information",
+    "$RECYCLE.BIN",
+    "$Recycle.Bin",
+];
 
 /// Décrit un fichier ou un dossier (récursivement) sous forme de manifeste.
 ///
@@ -117,14 +126,16 @@ const IGNORED_NAMES: &[&str] = &["Thumbs.db", "desktop.ini"];
 /// - les hash ne sont pas calculés ici (`root_hash` reste vide).
 pub fn scan(path: &Path) -> io::Result<Manifest> {
     let metadata = fs::symlink_metadata(path)?;
-    let name = path
-        .file_name()
-        .map(|n| n.to_string_lossy().into_owned())
-        .unwrap_or_else(|| path.display().to_string());
+    let name = content_name(path);
 
     let mut files = Vec::new();
     if metadata.is_file() {
-        files.push(entry(name.clone(), &metadata));
+        // Le chemin relatif d'un fichier seul est son vrai nom, pour le relire.
+        let file_name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_else(|| name.clone());
+        files.push(entry(file_name, &metadata));
     } else if metadata.is_dir() {
         walk(path, path, &mut files)?;
         files.sort_by(|a, b| a.path.cmp(&b.path));
@@ -136,6 +147,163 @@ pub fn scan(path: &Path) -> io::Result<Manifest> {
     }
 
     Ok(Manifest { name, files })
+}
+
+/// Manifeste de quelques éléments du dossier `root`, désignés par leur nom :
+/// fichiers ou sous-dossiers (parcourus récursivement). Seuls ces éléments sont
+/// lus, pas le reste du dossier. Le nom du contenu est celui de `root`.
+pub fn scan_parts(root: &Path, tops: &[String]) -> io::Result<Manifest> {
+    let mut files = Vec::new();
+    for top in tops {
+        if !is_safe_relative_path(top) || top.contains('/') {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("nom refusé : {top}"),
+            ));
+        }
+        if is_ignored(top) {
+            continue;
+        }
+        let path = root.join(top);
+        let metadata = fs::symlink_metadata(&path)?;
+        if metadata.is_dir() {
+            walk(root, &path, &mut files)?;
+        } else if metadata.is_file() {
+            files.push(entry(top.clone(), &metadata));
+        }
+    }
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    files.dedup_by(|a, b| a.path == b.path);
+    Ok(Manifest {
+        name: content_name(root),
+        files,
+    })
+}
+
+/// Premier niveau de chaque chemin (`A001/clip.mov` donne `A001`), sans doublon.
+pub fn top_levels(paths: &[String]) -> Vec<String> {
+    let mut tops: Vec<String> = paths
+        .iter()
+        .filter_map(|p| p.split('/').next())
+        .map(str::to_string)
+        .collect();
+    tops.sort();
+    tops.dedup();
+    tops
+}
+
+/// Ne garde du manifeste que les chemins choisis par l'expéditeur, dans l'ordre
+/// du manifeste. Erreur si la liste est vide ou si un chemin n'existe plus (le
+/// dossier a changé entre le choix et l'envoi).
+pub fn keep_only(manifest: Manifest, only: &[String]) -> io::Result<Manifest> {
+    if only.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "aucun fichier choisi",
+        ));
+    }
+    let wanted: std::collections::HashSet<&str> = only.iter().map(String::as_str).collect();
+    let files: Vec<FileEntry> = manifest
+        .files
+        .into_iter()
+        .filter(|f| wanted.contains(f.path.as_str()))
+        .collect();
+    if files.len() != wanted.len() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            "des fichiers choisis ont disparu ou changé de nom : choisis à nouveau le dossier",
+        ));
+    }
+    Ok(Manifest {
+        name: manifest.name,
+        files,
+    })
+}
+
+/// Nom du contenu tel que le verra le destinataire : le nom du dossier ou du
+/// fichier, sans caractère interdit. Une racine de disque n'a pas de nom : on
+/// prend le nom du volume (sous Windows, celui affiché dans l'Explorateur ; sur
+/// Mac, une carte est montée sous `/Volumes/<nom>` et a donc déjà un nom). Un
+/// disque sans nom devient `Rushes_<date d'envoi>` : la lettre du lecteur ne
+/// voudrait rien dire chez le destinataire.
+pub fn content_name(path: &Path) -> String {
+    if let Some(name) = path.file_name() {
+        let clean = sanitize_name(&name.to_string_lossy());
+        if !clean.is_empty() {
+            return clean;
+        }
+    }
+    if let Some(label) = volume_label(path) {
+        let clean = sanitize_name(&label);
+        if !clean.is_empty() {
+            return clean;
+        }
+    }
+    format!("Rushes_{}", chrono::Local::now().format("%Y-%m-%d"))
+}
+
+/// Nom du volume dont `path` est la racine (Windows uniquement).
+#[cfg(windows)]
+fn volume_label(path: &Path) -> Option<String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::GetVolumeInformationW;
+
+    // La fonction attend une racine terminée par une barre oblique inverse : « G:\ ».
+    let backslash = u16::from(b'\\');
+    let mut root: Vec<u16> = path.as_os_str().encode_wide().collect();
+    if root.last() != Some(&backslash) {
+        root.push(backslash);
+    }
+    root.push(0);
+
+    let mut name = [0u16; 261];
+    // SAFETY : chaînes terminées par zéro, tampon de taille annoncée, pointeurs
+    // facultatifs nuls (autorisés par l'API).
+    let ok = unsafe {
+        GetVolumeInformationW(
+            root.as_ptr(),
+            name.as_mut_ptr(),
+            name.len() as u32,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            0,
+        )
+    };
+    if ok == 0 {
+        return None;
+    }
+    let len = name.iter().position(|&c| c == 0).unwrap_or(name.len());
+    let label = String::from_utf16_lossy(&name[..len]);
+    let label = label.trim();
+    (!label.is_empty()).then(|| label.to_string())
+}
+
+#[cfg(not(windows))]
+fn volume_label(_path: &Path) -> Option<String> {
+    None
+}
+
+/// Remplace les caractères interdits dans un nom de fichier (Windows compris)
+/// et retire les espaces et points en début ou fin de nom.
+fn sanitize_name(name: &str) -> String {
+    let replaced: String = name
+        .chars()
+        .map(|c| {
+            if "<>:\"/\\|?*".contains(c) || c.is_control() {
+                '_'
+            } else {
+                c
+            }
+        })
+        .collect();
+    let trimmed = replaced.trim_matches(|c| c == ' ' || c == '.');
+    if trimmed.chars().all(|c| c == '_') {
+        String::new()
+    } else {
+        trimmed.to_string()
+    }
 }
 
 fn walk(root: &Path, dir: &Path, files: &mut Vec<FileEntry>) -> io::Result<()> {
@@ -179,7 +347,6 @@ fn is_ignored(file_name: &str) -> bool {
         || IGNORED_NAMES.contains(&file_name)
         || file_name.ends_with(".lugus-part")
         || file_name.ends_with(".lugus-journal")
-        || file_name.ends_with(".lugus.b3")
 }
 
 /// Chemin relatif avec `/`, uniquement fait de composants normaux.
@@ -272,6 +439,27 @@ mod tests {
     }
 
     #[test]
+    fn content_names() {
+        assert_eq!(content_name(Path::new("/rushes/J04")), "J04");
+        assert_eq!(content_name(Path::new("/rushes/clip.braw")), "clip.braw");
+        assert_eq!(sanitize_name("J04: jour 4?"), "J04_ jour 4_");
+        assert_eq!(sanitize_name(" ..carte. "), "carte");
+        assert_eq!(sanitize_name(":"), "");
+        // Racine : jamais de nom vide ni de caractère interdit.
+        let root = content_name(Path::new("/"));
+        assert!(is_safe_relative_path(&root) && !root.contains('/'));
+        assert!(root.starts_with("Rushes_20"));
+    }
+
+    #[test]
+    fn system_folders_are_ignored() {
+        assert!(is_ignored("System Volume Information"));
+        assert!(is_ignored("$RECYCLE.BIN"));
+        assert!(is_ignored(".Spotlight-V100"));
+        assert!(!is_ignored("A001"));
+    }
+
+    #[test]
     fn hex_format() {
         let mut hash = [0u8; 32];
         hash[0] = 0xab;
@@ -309,6 +497,59 @@ mod tests {
         assert_eq!(manifest.total_bytes(), 14);
         assert_eq!(manifest.files[0].kind, FileKind::Original);
 
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn keep_only_selected_paths() {
+        let file = |path: &str| FileEntry {
+            path: path.to_string(),
+            size: 1,
+            modified_unix: None,
+            kind: classify(path),
+            root_hash: None,
+        };
+        let manifest = Manifest {
+            name: "J04".to_string(),
+            files: vec![
+                file("A001/clip.braw"),
+                file("A001/clip.xml"),
+                file("Proxy/clip.mov"),
+            ],
+        };
+        let only = vec!["Proxy/clip.mov".to_string(), "A001/clip.braw".to_string()];
+        let kept = keep_only(manifest.clone(), &only).unwrap();
+        let paths: Vec<&str> = kept.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, ["A001/clip.braw", "Proxy/clip.mov"]);
+        assert_eq!(kept.name, "J04");
+
+        assert!(keep_only(manifest.clone(), &[]).is_err());
+        let gone = vec!["A001/absent.braw".to_string()];
+        assert!(keep_only(manifest, &gone).is_err());
+    }
+
+    #[test]
+    fn scan_some_parts_only() {
+        let root = std::env::temp_dir().join(format!("lugus-parts-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("Proxy/A001")).unwrap();
+        fs::create_dir_all(root.join("Autre")).unwrap();
+        fs::write(root.join("A001C001.braw"), b"0123").unwrap();
+        fs::write(root.join("A001C002.braw"), b"45").unwrap();
+        fs::write(root.join("Proxy/A001/A001C001.mov"), b"6").unwrap();
+        fs::write(root.join("Autre/ignore.txt"), b"7").unwrap();
+
+        let tops = vec!["A001C001.braw".to_string(), "Proxy".to_string()];
+        let manifest = scan_parts(&root, &tops).unwrap();
+        let paths: Vec<&str> = manifest.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, ["A001C001.braw", "Proxy/A001/A001C001.mov"]);
+        assert!(scan_parts(&root, &["../x".to_string()]).is_err());
+
+        let only = vec![
+            "Proxy/A001/A001C001.mov".to_string(),
+            "A001C001.braw".to_string(),
+        ];
+        assert_eq!(top_levels(&only), ["A001C001.braw", "Proxy"]);
         fs::remove_dir_all(&root).unwrap();
     }
 

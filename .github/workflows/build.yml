@@ -1,8 +1,16 @@
 name: Compilation
 
-# Déclenchement manuel uniquement (bouton « Run workflow »), jamais à chaque push.
+# Se lance :
+#  - à la publication d'une Release sur GitHub (les fichiers y sont alors attachés automatiquement) ;
+#  - à la main (onglet Actions > Compilation > Run workflow) pour un simple test, sans Release.
+# Jamais à chaque push.
 on:
+  release:
+    types: [published]
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -15,41 +23,77 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace
+      # L'application Tauri demande WebKitGTK sous Linux : seul le moteur est testé ici.
+      - run: cargo test --workspace --exclude lugus-app
 
-  windows:
-    name: Windows
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace
-      - run: cargo build --release -p lugus-cli
-      - uses: actions/upload-artifact@v4
-        with:
-          name: lugus-windows-x64
-          path: target/release/lugus.exe
-
-  macos:
-    name: macOS (universel)
-    runs-on: macos-latest
+  build:
+    name: ${{ matrix.name }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: Windows
+            os: windows-latest
+            tauri_args: ""
+          - name: macOS (universel)
+            os: macos-latest
+            tauri_args: "--target universal-apple-darwin"
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: aarch64-apple-darwin,x86_64-apple-darwin
+          targets: ${{ matrix.os == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace
-      - run: cargo build --release -p lugus-cli --target aarch64-apple-darwin
-      - run: cargo build --release -p lugus-cli --target x86_64-apple-darwin
-      - name: Binaire universel (Apple Silicon et Intel)
+
+      - name: Tests du moteur
+        run: cargo test --workspace --exclude lugus-app
+
+      # Ligne de commande
+      - name: CLI Windows
+        if: runner.os == 'Windows'
+        shell: bash
         run: |
+          cargo build --release -p lugus-cli
+          mkdir -p dist && cp target/release/lugus.exe "dist/lugus_$(grep -m1 '"version"' src-tauri/tauri.conf.json | cut -d'"' -f4)_windows.exe"
+      - name: CLI macOS universel
+        if: runner.os == 'macOS'
+        run: |
+          cargo build --release -p lugus-cli --target aarch64-apple-darwin
+          cargo build --release -p lugus-cli --target x86_64-apple-darwin
           mkdir -p dist
-          lipo -create -output dist/lugus \
+          lipo -create -output "dist/lugus_$(grep -m1 '"version"' src-tauri/tauri.conf.json | cut -d'"' -f4)_macos" \
             target/aarch64-apple-darwin/release/lugus \
             target/x86_64-apple-darwin/release/lugus
+
+      # Application
+      - name: CLI Tauri
+        run: cargo install tauri-cli --version "^2" --locked
+      - name: Application
+        working-directory: src-tauri
+        run: cargo tauri build ${{ matrix.tauri_args }}
+      - name: Exe portable Windows
+        if: runner.os == 'Windows'
+        shell: bash
+        run: cp target/release/lugus-app.exe "dist/Lugus_Transfer_$(grep -m1 '"version"' src-tauri/tauri.conf.json | cut -d'"' -f4)_portable.exe"
+      # GitHub remplace les espaces des noms de fichiers par des points : on les
+      # remplace nous-mêmes par des tirets bas (Lugus_Transfer_0.1.0_x64-setup.exe).
+      - name: Rassembler les fichiers
+        shell: bash
+        run: |
+          shopt -s globstar nullglob
+          for f in target/**/release/bundle/**/*.msi target/**/release/bundle/**/*-setup.exe target/**/release/bundle/**/*.dmg; do
+            cp "$f" "dist/$(basename "$f" | tr ' ' '_')"
+          done
+          ls -l dist
+
       - uses: actions/upload-artifact@v4
         with:
-          name: lugus-macos-universel
-          path: dist/lugus
+          name: lugus-${{ runner.os }}
+          path: dist/*
+
+      - name: Attacher à la Release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*

@@ -10,18 +10,35 @@
 //! Un bloc est d'abord écrit dans le fichier partiel, puis son hash est ajouté
 //! au journal. Après une coupure, on repart du dernier bloc journalisé.
 //!
-//! À la fin, le fichier est **relu depuis le disque** : chaque bloc est comparé
-//! à son hash et le hash du fichier entier est comparé à celui de l'émetteur
-//! quand il est connu. Le fichier est ensuite daté comme la source et renommé.
+//! À la fin, le fichier est **relu depuis le disque, sans le cache du système**
+//! (module `rawio`, repris de Bandua) : chaque bloc est comparé à son hash et le
+//! hash du fichier entier à celui de l'émetteur. Le xxHash64 du MHL est calculé
+//! pendant cette même relecture. Le fichier est ensuite daté comme la source et
+//! renommé. Si la vérification échoue, le journal est effacé : une nouvelle
+//! tentative reprendra le fichier depuis le début.
 
 use std::fs::{self, File, OpenOptions};
-use std::io::{self, Read, Seek, SeekFrom, Write};
+use std::io::{self, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, UNIX_EPOCH};
 
 use lugus_core::protocol::{FileEntry, Hash, BLOCK_SIZE};
+use xxhash_rust::xxh64::Xxh64;
 
 use crate::is_safe_relative_path;
+use crate::rawio::{self, AlignedBuf, ReadError};
+
+/// Résultat de la vérification d'un fichier sur le disque de destination.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Verified {
+    /// BLAKE3 du fichier entier (identique à celui de la source).
+    pub blake3: Hash,
+    /// xxHash64 du fichier, pour le MHL.
+    pub xxh64: u64,
+    /// `true` si la relecture a réellement contourné le cache du système.
+    pub uncached: bool,
+}
 
 const PART_SUFFIX: &str = ".lugus-part";
 const JOURNAL_SUFFIX: &str = ".lugus-journal";
@@ -100,6 +117,8 @@ impl Incoming {
             .create(true)
             .truncate(false)
             .open(&part_path)?;
+        // macOS : les pages écrites ne restent pas en cache, la relecture lira le disque.
+        rawio::prepare_write(&part);
 
         // Garde uniquement les blocs journalisés dont les données sont sur le disque.
         let part_len = part.metadata()?.len();
@@ -176,40 +195,37 @@ impl Incoming {
         Ok(())
     }
 
-    /// Relit le fichier depuis le disque, le vérifie, le date et le renomme.
-    /// Renvoie le hash BLAKE3 du fichier entier.
-    pub fn finish(mut self, sender_full_hash: Option<Hash>) -> io::Result<Hash> {
+    /// Relit le fichier depuis le disque (sans cache), le vérifie, le date et
+    /// le renomme. En cas d'échec, le journal est effacé pour tout reprendre.
+    /// `progress` compte les octets relus, pour l'affichage.
+    pub fn finish(
+        mut self,
+        sender_full_hash: Option<Hash>,
+        progress: Option<&AtomicU64>,
+    ) -> io::Result<Verified> {
         if !self.is_complete() {
             return Err(invalid("fichier incomplet".to_string()));
         }
         self.part.flush()?;
         self.part.sync_all()?;
 
-        let mut reader = File::open(&self.part_path)?;
-        let mut buffer = vec![0u8; BLOCK_SIZE as usize];
-        let mut full = blake3::Hasher::new();
-        for (index, expected) in self.hashes.iter().enumerate() {
-            let start = index as u64 * BLOCK_SIZE;
-            let len = BLOCK_SIZE.min(self.size - start) as usize;
-            reader.read_exact(&mut buffer[..len])?;
-            if blake3::hash(&buffer[..len]) != blake3::Hash::from_bytes(*expected) {
-                return Err(invalid(format!(
-                    "{} : le bloc {index} relu ne correspond pas",
-                    self.final_path.display()
-                )));
+        let result = verify(&self.part_path, self.size, Some(&self.hashes), progress);
+        let verified = match result {
+            Ok(verified) => verified,
+            Err(err) => {
+                self.forget_progress();
+                return Err(with_path(err, &self.final_path));
             }
-            full.update(&buffer[..len]);
-        }
-        let full = *full.finalize().as_bytes();
+        };
         if let Some(expected) = sender_full_hash {
-            if expected != full {
+            if expected != verified.blake3 {
+                self.forget_progress();
                 return Err(invalid(format!(
                     "{} : hash du fichier différent de la source",
                     self.final_path.display()
                 )));
             }
         }
-        drop(reader);
 
         if let Some(secs) = self.modified_unix.filter(|s| *s >= 0) {
             let time = UNIX_EPOCH + Duration::from_secs(secs as u64);
@@ -227,23 +243,124 @@ impl Incoming {
         drop(journal);
         fs::rename(&part_path, &final_path)?;
         let _ = fs::remove_file(&journal_path);
-        Ok(full)
+        Ok(verified)
+    }
+
+    /// Efface le journal : la prochaine ouverture reprendra le fichier à zéro.
+    fn forget_progress(&mut self) {
+        let _ = self.journal.set_len(0);
+        let _ = fs::remove_file(&self.journal_path);
     }
 }
 
-/// Hash BLAKE3 d'un fichier déjà présent sur le disque.
-pub fn hash_file(path: &Path) -> io::Result<Hash> {
-    let mut file = File::open(path)?;
-    let mut hasher = blake3::Hasher::new();
-    let mut buffer = vec![0u8; BLOCK_SIZE as usize];
-    loop {
-        let read = file.read(&mut buffer)?;
-        if read == 0 {
-            break;
+/// Hash d'un fichier déjà présent sur le disque (relu sans cache).
+pub fn hash_file(path: &Path, progress: Option<&AtomicU64>) -> io::Result<Verified> {
+    let size = fs::metadata(path)?.len();
+    verify(path, size, None, progress).map_err(|err| with_path(err, path))
+}
+
+/// Relit `size` octets sans cache, calcule BLAKE3 et xxHash64 et, si
+/// `blocks` est fourni, compare chaque bloc de `BLOCK_SIZE` à son hash.
+fn verify(
+    path: &Path,
+    size: u64,
+    blocks: Option<&[Hash]>,
+    progress: Option<&AtomicU64>,
+) -> io::Result<Verified> {
+    let (mut reader, uncached) = rawio::open_uncached(path)?;
+    let mut buffer = AlignedBuf::new(BLOCK_SIZE as usize);
+    let mut full = blake3::Hasher::new();
+    let mut xxh = Xxh64::new(0);
+    let mut block = blake3::Hasher::new();
+    let mut filled = 0u64;
+    let mut index = 0usize;
+
+    let outcome = rawio::read_sized(&mut reader, size, &mut buffer, |chunk| {
+        full.update(chunk);
+        xxh.update(chunk);
+        if let Some(progress) = progress {
+            progress.fetch_add(chunk.len() as u64, Ordering::Relaxed);
         }
-        hasher.update(&buffer[..read]);
+        let Some(expected) = blocks else {
+            return Ok(());
+        };
+        // Les lectures sans cache peuvent rendre moins qu'un bloc : on découpe
+        // le flux aux frontières de blocs.
+        let mut rest = chunk;
+        while !rest.is_empty() {
+            let block_len = BLOCK_SIZE.min(size - index as u64 * BLOCK_SIZE);
+            let take = ((block_len - filled) as usize).min(rest.len());
+            block.update(&rest[..take]);
+            filled += take as u64;
+            rest = &rest[take..];
+            if filled == block_len {
+                let Some(hash) = expected.get(index) else {
+                    return Err(format!("bloc {index} absent du journal"));
+                };
+                if block.finalize() != blake3::Hash::from_bytes(*hash) {
+                    return Err(format!("le bloc {index} relu ne correspond pas"));
+                }
+                block = blake3::Hasher::new();
+                filled = 0;
+                index += 1;
+            }
+        }
+        Ok(())
+    });
+
+    match outcome {
+        Ok(()) => Ok(Verified {
+            blake3: *full.finalize().as_bytes(),
+            xxh64: xxh.digest(),
+            uncached,
+        }),
+        Err(ReadError::Io(err)) => Err(err),
+        Err(ReadError::Short(read)) => Err(invalid(format!(
+            "fichier plus court que prévu ({read} octets sur {size})"
+        ))),
+        Err(ReadError::Long) => Err(invalid("fichier plus long que prévu".to_string())),
+        Err(ReadError::Abort(message)) => Err(invalid(message)),
     }
-    Ok(*hasher.finalize().as_bytes())
+}
+
+fn with_path(err: io::Error, path: &Path) -> io::Error {
+    io::Error::new(err.kind(), format!("{} : {err}", path.display()))
+}
+
+/// Octets d'un fichier déjà présents à destination, en lecture seule : la taille
+/// entière si le fichier final est là, sinon le point de reprise que donnerait
+/// `Incoming::open` (blocs journalisés dont les données sont sur le disque).
+/// Sert à afficher dès la reconnexion le même avancement des deux côtés.
+pub fn resume_point(base: &Path, entry: &FileEntry) -> u64 {
+    if !is_safe_relative_path(&entry.path) {
+        return 0;
+    }
+    let mut final_path = base.to_path_buf();
+    for part in entry.path.split('/') {
+        final_path.push(part);
+    }
+    if let Ok(metadata) = fs::metadata(&final_path) {
+        return if metadata.is_file() && metadata.len() == entry.size {
+            entry.size
+        } else {
+            0
+        };
+    }
+    let header = journal_header(entry.size, entry.modified_unix);
+    let Some(hashes) = read_journal(&with_suffix(&final_path, JOURNAL_SUFFIX), &header) else {
+        return 0;
+    };
+    if hashes.len() as u64 > entry.size.div_ceil(BLOCK_SIZE) {
+        return 0;
+    }
+    let part_len = fs::metadata(with_suffix(&final_path, PART_SUFFIX))
+        .map(|m| m.len())
+        .unwrap_or(0);
+    let mut blocks = hashes.len();
+    while blocks > 0 && covered(blocks, entry.size) > part_len {
+        blocks -= 1;
+    }
+    covered(blocks, entry.size)
 }
 
 /// Octets couverts par `blocks` blocs complets, sans dépasser la taille du fichier.
@@ -295,8 +412,11 @@ mod tests {
     use super::*;
     use lugus_core::protocol::FileKind;
 
+    /// Dossier de test sur le disque du projet (pas /tmp, souvent en mémoire).
     fn temp_dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(format!("lugus-{name}-{}", std::process::id()));
+        let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/test-tmp")
+            .join(format!("incoming-{}-{name}", std::process::id()));
         let _ = fs::remove_dir_all(&dir);
         fs::create_dir_all(&dir).unwrap();
         dir
@@ -345,9 +465,16 @@ mod tests {
         let entry = entry(data.len());
         let mut incoming = partial(&base, &entry);
         send_blocks(&mut incoming, &data, 0, 3);
-        let full = incoming
-            .finish(Some(*blake3::hash(&data).as_bytes()))
+        let reread = AtomicU64::new(0);
+        let verified = incoming
+            .finish(Some(*blake3::hash(&data).as_bytes()), Some(&reread))
             .unwrap();
+        // Le compteur de relecture couvre tout le fichier.
+        assert_eq!(reread.load(Ordering::Relaxed), data.len() as u64);
+        let full = verified.blake3;
+        let mut xxh = Xxh64::new(0);
+        xxh.update(&data);
+        assert_eq!(verified.xxh64, xxh.digest());
 
         let final_path = base.join("A001/clip.mov");
         assert_eq!(fs::read(&final_path).unwrap(), data);
@@ -366,11 +493,14 @@ mod tests {
         send_blocks(&mut first, &data, 0, 1);
         drop(first);
 
+        // Le point de reprise lu sans rien modifier est celui de la réouverture.
+        assert_eq!(resume_point(&base, &entry), BLOCK_SIZE);
         let mut second = partial(&base, &entry);
         assert_eq!(second.offset(), BLOCK_SIZE);
         send_blocks(&mut second, &data, 1, 3);
-        second.finish(None).unwrap();
+        second.finish(None, None).unwrap();
         assert_eq!(fs::read(base.join("A001/clip.mov")).unwrap(), data);
+        assert_eq!(resume_point(&base, &entry), data.len() as u64);
         fs::remove_dir_all(&base).unwrap();
     }
 
@@ -412,7 +542,10 @@ mod tests {
         file.write_all(b"X").unwrap();
         drop(file);
 
-        assert!(incoming.finish(None).is_err());
+        assert!(incoming.finish(None, None).is_err());
+        // Après un échec, la nouvelle tentative repart de zéro.
+        let retry = partial(&base, &entry(data.len()));
+        assert_eq!(retry.offset(), 0);
         fs::remove_dir_all(&base).unwrap();
     }
 
@@ -421,10 +554,12 @@ mod tests {
         let base = temp_dir("empty");
         let incoming = partial(&base, &entry(0));
         assert!(incoming.is_complete());
-        let full = incoming
-            .finish(Some(*blake3::hash(b"").as_bytes()))
+        let verified = incoming
+            .finish(Some(*blake3::hash(b"").as_bytes()), None)
             .unwrap();
-        assert_eq!(full, *blake3::hash(b"").as_bytes());
+        assert_eq!(verified.blake3, *blake3::hash(b"").as_bytes());
+        // Valeur de référence de xxHash64 pour un fichier vide.
+        assert_eq!(verified.xxh64, 0xef46db3751d8e999);
         assert_eq!(fs::read(base.join("A001/clip.mov")).unwrap().len(), 0);
         fs::remove_dir_all(&base).unwrap();
     }

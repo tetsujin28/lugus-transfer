@@ -300,7 +300,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "liste de mots provisoire, voir wordlist_fr.txt"]
     fn wordlist_has_recommended_size() {
         assert_eq!(words().len(), RECOMMENDED_WORDS);
     }
