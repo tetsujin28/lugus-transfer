@@ -50,7 +50,7 @@ El remitente y el destinatario necesitan Lugus Transfer, pero no el mismo sistem
 La aplicación todavía no está firmada, así que tu sistema muestra un aviso, una sola vez:
 
 - **Windows**: haz clic en «Más información» y después en «Ejecutar de todas formas».
-- **macOS**: haz clic derecho en la aplicación, elige «Abrir» y confirma.
+- **macOS**: haz doble clic en la aplicación y cierra el mensaje de bloqueo. Abre Ajustes del Sistema > Privacidad y seguridad, baja hasta la sección Seguridad y haz clic en «Abrir de todos modos» junto al nombre de la aplicación; confirma con la contraseña de sesión (solo se pide una vez). Si el botón no aparece, abre Terminal y escribe `xattr -dr com.apple.quarantine ` seguido de la aplicación arrastrada a la ventana.
 
 También puede que el navegador marque la descarga como inusual. Es habitual con una aplicación reciente y sin firmar. Conserva el archivo desde el panel de descargas. Si tienes dudas, analízalo en [VirusTotal](https://www.virustotal.com).
 

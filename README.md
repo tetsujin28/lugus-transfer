@@ -31,7 +31,7 @@ Both computers need Lugus Transfer. The sender and the recipient do not need the
 
 **First launch.** The app is not signed yet, so your system will warn you once:
 - **Windows**: click "More info", then "Run anyway".
-- **macOS**: right-click the app, choose "Open", then confirm.
+- **macOS**: double-click the app, then close the blocking message. Open System Settings > Privacy & Security, scroll down to the Security section and click "Open Anyway" next to the app's name, then confirm with your session password (asked only once). If the button does not appear, open Terminal and type `xattr -dr com.apple.quarantine ` followed by the app dragged onto the window.
 
 Your browser may also flag the download as unusual or dangerous: this is common for new, unsigned apps. Keep the file from the downloads panel, and if in doubt, check it on [VirusTotal](https://www.virustotal.com). If your system asks whether Lugus Transfer may use the network, allow it: that is how the two computers reach each other.
 
