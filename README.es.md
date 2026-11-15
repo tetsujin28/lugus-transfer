@@ -31,7 +31,7 @@ Los dos ordenadores necesitan Lugus Transfer. El remitente y el destinatario no 
 
 **Primer arranque.** La aplicación todavía no está firmada, así que tu sistema mostrará un aviso una sola vez:
 - **Windows**: haz clic en «Más información» y después en «Ejecutar de todas formas».
-- **macOS**: haz clic derecho en la aplicación, elige «Abrir» y confirma.
+- **macOS**: haz doble clic en la aplicación y cierra el mensaje de bloqueo. Abre Ajustes del Sistema > Privacidad y seguridad, baja hasta la sección Seguridad y haz clic en «Abrir de todos modos» junto al nombre de la aplicación; confirma con la contraseña de sesión (solo se pide una vez). Si el botón no aparece, abre Terminal y escribe `xattr -dr com.apple.quarantine ` seguido de la aplicación arrastrada a la ventana.
 
 Tu navegador también puede marcar la descarga como inusual o peligrosa: es habitual con una aplicación reciente y sin firmar. Conserva el archivo desde el panel de descargas y, si tienes dudas, analízalo en [VirusTotal](https://www.virustotal.com). Si tu sistema pregunta si Lugus Transfer puede usar la red, permítelo: así es como los dos ordenadores se encuentran.
 

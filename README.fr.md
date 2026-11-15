@@ -31,7 +31,7 @@ Les deux ordinateurs ont besoin de Lugus Transfer. L'expéditeur et le destinata
 
 **Premier lancement.** L'application n'est pas encore signée : votre système affiche un avertissement, une seule fois.
 - **Windows** : cliquez sur « Informations complémentaires », puis « Exécuter quand même ».
-- **macOS** : faites un clic droit sur l'application, choisissez « Ouvrir », puis confirmez.
+- **macOS** : double-cliquez sur l'application, puis fermez le message de blocage. Ouvrez Réglages Système > Confidentialité et sécurité, descendez jusqu'à la section Sécurité et cliquez sur « Ouvrir quand même » à côté du nom de l'application ; confirmez avec le mot de passe de session (demandé une seule fois). Si le bouton n'apparaît pas, ouvrez le Terminal et tapez `xattr -dr com.apple.quarantine ` suivi de l'application glissée dans la fenêtre.
 
 Votre navigateur peut aussi signaler le téléchargement comme inhabituel ou dangereux : c'est courant pour une application récente et non signée. Gardez le fichier depuis le panneau des téléchargements et, en cas de doute, faites-le analyser sur [VirusTotal](https://www.virustotal.com). Si votre système demande si Lugus Transfer peut utiliser le réseau, autorisez-le : c'est ainsi que les deux ordinateurs se joignent.
 
