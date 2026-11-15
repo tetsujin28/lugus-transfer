@@ -124,7 +124,7 @@ function demoBackend() {
   const later = (ms, f) => timers.push(setTimeout(f, ms));
   const stopAll = () => { timers.forEach(clearTimeout); timers.forEach(clearInterval); timers = []; };
   const words = ["lanterne", "riviere", "falaise", "cheval", "sentier"];
-  const code = () => `${String(Math.floor(Math.random() * 10000)).padStart(4, "0")}-${words[Math.floor(Math.random() * words.length)]}-${Math.floor(Math.random() * 10)}`;
+  const code = () => window.LUGUS_DEMO_CODE || `${String(Math.floor(Math.random() * 10000)).padStart(4, "0")}-${words[Math.floor(Math.random() * words.length)]}-${Math.floor(Math.random() * 10)}`;
   const link = "lugus://r/ng6bfcmwftaipe1e6x8tpdnhp5ijxqcixciyurigwfs3hg9ng58o?v=1";
   // Transfert simulé, puis vérification qui continue après 100 %.
   // Débit simulé : rapide par défaut, réaliste si window.LUGUS_DEMO_RATE (octets/s)

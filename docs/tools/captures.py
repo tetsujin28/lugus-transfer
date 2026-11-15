@@ -49,6 +49,7 @@ async def fresh(browser, lang, accepted=True):
     page = await ctx.new_page()
     await page.clock.install(time="2026-11-15T14:32:00")
     init = "window.LUGUS_DEMO_RATE=110e6;"  # 110 Mo/s, une fibre à 1 Gbit/s
+    init += f"window.LUGUS_DEMO_CODE='{CODE}';"
     init += f"localStorage.setItem('lugus.lang',JSON.stringify('{lang}'));localStorage.setItem('lugus.mode',JSON.stringify('send'));"
     if accepted:
         init += "localStorage.setItem('lugus.accepted',JSON.stringify(true));"
