@@ -42,9 +42,13 @@ struct PathSummary {
     name: String,
     files: usize,
     bytes: u64,
-    /// `true` pour un dossier : l'interface propose alors de choisir les fichiers.
+    /// `true` pour un dossier ou plusieurs éléments : l'interface propose alors
+    /// de choisir les fichiers.
     folder: bool,
     entries: Vec<EntryInfo>,
+    /// Plusieurs éléments d'un même dossier : les fichiers concernés, à passer
+    /// tels quels à l'envoi (`SendOptions::only`). Absent : tout `path`.
+    only: Option<Vec<String>>,
 }
 
 /// Un fichier du dossier, pour l'écran de choix.
@@ -68,40 +72,66 @@ async fn pick_folder(app: AppHandle, start: Option<String>) -> Option<String> {
     dialog.blocking_pick_folder().map(|p| p.to_string())
 }
 
-/// Choix d'un fichier seul à envoyer.
+/// Choix d'un ou plusieurs fichiers à envoyer.
 #[tauri::command]
-async fn pick_file(app: AppHandle) -> Option<String> {
+async fn pick_files(app: AppHandle) -> Option<Vec<String>> {
     app.dialog()
         .file()
-        .blocking_pick_file()
-        .map(|p| p.to_string())
+        .blocking_pick_files()
+        .map(|files| files.into_iter().map(|p| p.to_string()).collect())
 }
 
-/// Résumé d'un fichier ou d'un dossier avant l'envoi.
+/// Résumé de ce qui a été choisi ou glissé avant l'envoi : un dossier, un
+/// fichier, ou plusieurs éléments d'un même dossier. Erreur `lugus:` + clé de
+/// traduction pour les cas expliqués par l'interface.
 #[tauri::command]
-async fn scan_path(path: String) -> Result<PathSummary, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let source = PathBuf::from(&path);
-        let manifest = lugus_store::scan(&source).map_err(|e| e.to_string())?;
-        Ok(PathSummary {
-            name: manifest.name.clone(),
-            files: manifest.files.len(),
-            bytes: manifest.total_bytes(),
-            folder: source.is_dir(),
-            entries: manifest
-                .files
+async fn scan_paths(paths: Vec<String>) -> Result<PathSummary, String> {
+    tauri::async_runtime::spawn_blocking(move || summarize(paths))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+fn summarize(paths: Vec<String>) -> Result<PathSummary, String> {
+    let items: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
+    let (root, manifest, only) = match items.as_slice() {
+        [] => return Err("lugus:err_nothing".into()),
+        [one] => (
+            one.clone(),
+            lugus_store::scan(one).map_err(|e| e.to_string())?,
+            None,
+        ),
+        [first, ..] => {
+            let parent = first.parent().ok_or("lugus:err_same_folder")?.to_path_buf();
+            if items.iter().any(|p| p.parent() != Some(parent.as_path())) {
+                return Err("lugus:err_same_folder".into());
+            }
+            let tops: Vec<String> = items
                 .iter()
-                .map(|f| EntryInfo {
-                    path: f.path.clone(),
-                    size: f.size,
-                    kind: f.kind,
-                })
-                .collect(),
-            path,
-        })
+                .filter_map(|p| p.file_name())
+                .map(|n| n.to_string_lossy().into_owned())
+                .collect();
+            let manifest = lugus_store::scan_parts(&parent, &tops).map_err(|e| e.to_string())?;
+            let only = manifest.files.iter().map(|f| f.path.clone()).collect();
+            (parent, manifest, Some(only))
+        }
+    };
+    Ok(PathSummary {
+        path: root.display().to_string(),
+        name: manifest.name.clone(),
+        files: manifest.files.len(),
+        bytes: manifest.total_bytes(),
+        folder: root.is_dir(),
+        entries: manifest
+            .files
+            .iter()
+            .map(|f| EntryInfo {
+                path: f.path.clone(),
+                size: f.size,
+                kind: f.kind,
+            })
+            .collect(),
+        only,
     })
-    .await
-    .map_err(|e| e.to_string())?
 }
 
 /// Vérifie un code en local (forme, mot, chiffre de contrôle). Aucun réseau.
@@ -247,8 +277,8 @@ fn main() {
         .manage(AppState::default())
         .invoke_handler(tauri::generate_handler![
             pick_folder,
-            pick_file,
-            scan_path,
+            pick_files,
+            scan_paths,
             check_code,
             check_link,
             start_send,

@@ -55,8 +55,8 @@ function tauriBackend() {
   return {
     demo: false,
     pickFolder: (start) => invoke("pick_folder", { start }),
-    pickFile: () => invoke("pick_file"),
-    scan: (path) => invoke("scan_path", { path }),
+    pickFiles: () => invoke("pick_files"),
+    scan: (paths) => invoke("scan_paths", { paths }),
     checkCode: (code) => invoke("check_code", { code }),
     checkLink: (link) => invoke("check_link", { link }),
     send: (options) => invoke("start_send", { options }),
@@ -73,7 +73,7 @@ function tauriBackend() {
         const p = e.payload || {};
         if (p.type === "over" || p.type === "enter") $("drop").classList.add("over");
         else $("drop").classList.remove("over");
-        if (p.type === "drop" && p.paths?.length) cb(p.paths[0]);
+        if (p.type === "drop" && p.paths?.length) cb(p.paths);
       });
     },
   };
@@ -120,16 +120,26 @@ function demoBackend() {
   return {
     demo: true,
     pickFolder: async () => "/Volumes/RUSHES/J04",
-    pickFile: async () => "/Volumes/RUSHES/A001_09291343_C003.braw",
-    scan: async (path) => path.endsWith(".braw")
-      ? { path, name: path.split("/").pop(), files: 1, bytes: 4.2e9, folder: false, entries: [] }
-      : { path, name: path.split("/").pop(), files: demoEntries.length, bytes: demoEntries.reduce((a, e) => a + e.size, 0), folder: true, entries: demoEntries },
+    pickFiles: async () => ["/Volumes/RUSHES/J04/A001/A001C001.braw", "/Volumes/RUSHES/J04/A001/A001C002.braw", "/Volumes/RUSHES/J04/A001/A001C001.sidecar.xml"],
+    scan: async (paths) => {
+      const sum = (list) => list.reduce((a, e) => a + e.size, 0);
+      if (paths.length === 1 && paths[0].endsWith(".braw"))
+        return { path: paths[0], name: paths[0].split("/").pop(), files: 1, bytes: 4.2e9, folder: false, entries: [], only: null };
+      if (paths.length === 1)
+        return { path: paths[0], name: paths[0].split("/").pop(), files: demoEntries.length, bytes: sum(demoEntries), folder: true, entries: demoEntries, only: null };
+      const root = paths[0].split("/").slice(0, -1).join("/");
+      if (paths.some((p) => p.split("/").slice(0, -1).join("/") !== root)) throw "lugus:err_same_folder";
+      const names = paths.map((p) => p.split("/").pop());
+      const entries = demoEntries.filter((e) => e.path.startsWith("A001/") && names.includes(e.path.split("/").pop()))
+        .map((e) => ({ ...e, path: e.path.split("/").pop() }));
+      return { path: root, name: root.split("/").pop(), files: entries.length, bytes: sum(entries), folder: true, entries, only: entries.map((e) => e.path) };
+    },
     checkCode: async (c) => { if (!/^\d{4}-[a-z]+-\d$/i.test(c.trim())) throw t("demo_code_shape"); return c.trim().toLowerCase(); },
     checkLink: async (l) => { if (!/^lugus:\/\/r\/[a-z0-9]{52}/.test(l.trim())) throw t("demo_link_shape"); },
     send: async (o) => {
       later(100, () => handler({ type: "preparing" }));
       const files = o.only ? o.only.length : demoEntries.length;
-      const bytes = o.only ? demoEntries.filter((e) => o.only.includes(e.path)).reduce((a, e) => a + e.size, 0) : demoEntries.reduce((a, e) => a + e.size, 0);
+      const bytes = o.only ? demoEntries.filter((e) => o.only.includes(e.path) || o.only.includes(e.path.split("/").pop())).reduce((a, e) => a + e.size, 0) : demoEntries.reduce((a, e) => a + e.size, 0);
       later(700, () => handler({ type: "ready", link, code: code(), name: o.path.split("/").pop(), files, bytes, relay: true }));
       later(2600, () => handler({ type: "published", seconds: 1.9 }));
       later(4200, () => handler({ type: "incoming", path: "direct" }));
@@ -269,22 +279,30 @@ function renderDrop() {
     return;
   }
   d.classList.add("has");
-  const sel = sendSelection();
-  const files = sel ? `${sel.length} / ${S.source.files}` : S.source.files;
-  const bytes = sel ? S.pick.entries.filter((_, i) => S.pick.on.has(i)).reduce((a, e) => a + e.size, 0) : S.source.bytes;
+  const partial = S.pick?.side === "send" && S.pick.on.size < S.pick.entries.length;
+  const files = partial ? `${S.pick.on.size} / ${S.source.files}` : S.source.files;
+  const bytes = partial ? S.pick.entries.filter((_, i) => S.pick.on.has(i)).reduce((a, e) => a + e.size, 0) : S.source.bytes;
   d.innerHTML = `<div class="path">${esc(S.source.path)}</div>
     <div class="stats"><span>${esc(t("files_word"))} <b>${files}</b></span><span>${esc(t("size_word"))} <b>${fmtBytes(bytes)}</b></span></div>`;
 }
 
-async function useSource(path) {
-  if (!path || S.running) return;
+// Un dossier, un fichier, ou plusieurs éléments d'un même dossier.
+async function useSource(paths) {
+  if (!paths || S.running) return;
+  if (!Array.isArray(paths)) paths = [paths];
+  if (!paths.length) return;
   try {
-    S.source = await api.scan(path);
-    store.set("lastSource", path);
+    S.source = await api.scan(paths);
+    store.set("lastSource", S.source.path);
   } catch (e) {
     S.source = null;
-    log(t("read_fail") + " : " + e, "err");
+    const msg = String(e);
+    const text = msg.startsWith("lugus:") ? t(msg.slice(6)) : t("read_fail") + " : " + msg;
+    hint("srcHint", text, "bad");
+    closePicker(); renderDrop(); renderGo();
+    return;
   }
+  hint("srcHint", "");
   if (S.source?.folder && S.source.entries?.length > 1) openPicker("send", S.source.entries);
   else closePicker();
   renderDrop(); renderGo();
@@ -352,7 +370,8 @@ function closePicker() {
 
 // Chemins choisis à l'envoi, ou null si tout le dossier part.
 function sendSelection() {
-  if (S.pick?.side !== "send" || S.pick.on.size === S.pick.entries.length) return null;
+  if (S.pick?.side !== "send") return S.source?.only ?? null;
+  if (S.pick.on.size === S.pick.entries.length) return S.source?.only ?? null;
   return S.pick.entries.filter((_, i) => S.pick.on.has(i)).map((e) => e.path);
 }
 
@@ -834,8 +853,9 @@ function init() {
   $("modeRecv").onclick = () => setMode("recv");
 
   $("drop").onclick = async () => useSource(await api.pickFolder(store.get("lastSource", null)));
-  $("pickFile").onclick = async () => useSource(await api.pickFile());
-  api.onDrop((path) => { if (S.mode !== "send") setMode("send"); useSource(path); });
+  $("pickFolder").onclick = async () => useSource(await api.pickFolder(store.get("lastSource", null)));
+  $("pickFiles").onclick = async () => useSource(await api.pickFiles());
+  api.onDrop((paths) => { if (S.mode !== "send") setMode("send"); useSource(paths); });
 
   $("pickDest").onclick = async () => {
     const p = await api.pickFolder(S.dest);

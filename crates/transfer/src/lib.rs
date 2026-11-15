@@ -52,12 +52,15 @@ impl Source {
     }
 
     /// Comme `new`, en ne proposant que les chemins `only` (relatifs au dossier,
-    /// séparateur `/`) s'ils sont donnés.
+    /// séparateur `/`) s'ils sont donnés. Seuls les éléments concernés sont
+    /// relus, pas tout le dossier.
     pub fn with_selection(path: &Path, only: Option<&[String]>) -> std::io::Result<Self> {
-        let manifest = lugus_store::scan(path)?;
         let manifest = match only {
-            Some(only) => lugus_store::keep_only(manifest, only)?,
-            None => manifest,
+            Some(only) => {
+                let parts = lugus_store::scan_parts(path, &lugus_store::top_levels(only))?;
+                lugus_store::keep_only(parts, only)?
+            }
+            None => lugus_store::scan(path)?,
         };
         Ok(Self {
             root: lugus_store::source_root(path)?,

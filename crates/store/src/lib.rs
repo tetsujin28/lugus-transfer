@@ -149,6 +149,49 @@ pub fn scan(path: &Path) -> io::Result<Manifest> {
     Ok(Manifest { name, files })
 }
 
+/// Manifeste de quelques éléments du dossier `root`, désignés par leur nom :
+/// fichiers ou sous-dossiers (parcourus récursivement). Seuls ces éléments sont
+/// lus, pas le reste du dossier. Le nom du contenu est celui de `root`.
+pub fn scan_parts(root: &Path, tops: &[String]) -> io::Result<Manifest> {
+    let mut files = Vec::new();
+    for top in tops {
+        if !is_safe_relative_path(top) || top.contains('/') {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("nom refusé : {top}"),
+            ));
+        }
+        if is_ignored(top) {
+            continue;
+        }
+        let path = root.join(top);
+        let metadata = fs::symlink_metadata(&path)?;
+        if metadata.is_dir() {
+            walk(root, &path, &mut files)?;
+        } else if metadata.is_file() {
+            files.push(entry(top.clone(), &metadata));
+        }
+    }
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+    files.dedup_by(|a, b| a.path == b.path);
+    Ok(Manifest {
+        name: content_name(root),
+        files,
+    })
+}
+
+/// Premier niveau de chaque chemin (`A001/clip.mov` donne `A001`), sans doublon.
+pub fn top_levels(paths: &[String]) -> Vec<String> {
+    let mut tops: Vec<String> = paths
+        .iter()
+        .filter_map(|p| p.split('/').next())
+        .map(str::to_string)
+        .collect();
+    tops.sort();
+    tops.dedup();
+    tops
+}
+
 /// Ne garde du manifeste que les chemins choisis par l'expéditeur, dans l'ordre
 /// du manifeste. Erreur si la liste est vide ou si un chemin n'existe plus (le
 /// dossier a changé entre le choix et l'envoi).
@@ -483,6 +526,31 @@ mod tests {
         assert!(keep_only(manifest.clone(), &[]).is_err());
         let gone = vec!["A001/absent.braw".to_string()];
         assert!(keep_only(manifest, &gone).is_err());
+    }
+
+    #[test]
+    fn scan_some_parts_only() {
+        let root = std::env::temp_dir().join(format!("lugus-parts-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(root.join("Proxy/A001")).unwrap();
+        fs::create_dir_all(root.join("Autre")).unwrap();
+        fs::write(root.join("A001C001.braw"), b"0123").unwrap();
+        fs::write(root.join("A001C002.braw"), b"45").unwrap();
+        fs::write(root.join("Proxy/A001/A001C001.mov"), b"6").unwrap();
+        fs::write(root.join("Autre/ignore.txt"), b"7").unwrap();
+
+        let tops = vec!["A001C001.braw".to_string(), "Proxy".to_string()];
+        let manifest = scan_parts(&root, &tops).unwrap();
+        let paths: Vec<&str> = manifest.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, ["A001C001.braw", "Proxy/A001/A001C001.mov"]);
+        assert!(scan_parts(&root, &["../x".to_string()]).is_err());
+
+        let only = vec![
+            "Proxy/A001/A001C001.mov".to_string(),
+            "A001C001.braw".to_string(),
+        ];
+        assert_eq!(top_levels(&only), ["A001C001.braw", "Proxy"]);
+        fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]
