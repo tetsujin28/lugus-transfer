@@ -47,6 +47,44 @@ function applyLang() {
 }
 function setLang(l) { LANG = l; store.set("lang", l); applyLang(); }
 
+// ------------------------------------------------------------------ Erreurs du moteur
+// Le moteur écrit ses erreurs en français. Les cas connus sont reconnus ici et
+// affichés dans la langue de l'interface ; le texte d'origine va dans le journal.
+
+const ENGINE_ERRORS = [
+  [/émetteur introuvable/, "err_not_found"],
+  [/code incorrect, plus aucun essai/, "err_code_none_left"],
+  [/code incorrect, (\d+) essai/, "err_code_left", (m) => ({ n: m[1] })],
+  [/trop tôt après un essai raté, réessayez dans (\d+) s/, "err_too_soon", (m) => ({ s: m[1] })],
+  [/ce code est bloqué/, "err_locked"],
+  [/version incompatible/, "err_version"],
+  [/ce lien a expiré/, "err_expired"],
+  [/l'expéditeur est occupé/, "err_busy"],
+  [/(\S[^:]*?) : refusé par l'émetteur \(SourceChanged\)|un fichier a changé chez l'expéditeur/, "err_source_changed", (m) => ({ path: m[1] || "" })],
+  [/(\S[^:]*?) : refusé par l'émetteur \(FileUnavailable\)|un fichier est illisible chez l'expéditeur/, "err_file_unavailable", (m) => ({ path: m[1] || "" })],
+  [/(\S.*?) existe déjà avec une taille différente/, "err_exists", (m) => ({ path: m[1] })],
+  [/existe déjà à destination mais diffère de la source/, "err_exists", (m) => ({ path: "" })],
+  [/vérification de ([^:]+?): .*hash du fichier différent de la source/, "err_hash", (m) => ({ path: m[1] })],
+  [/hash du fichier différent de la source|bloc altéré/, "err_hash", () => ({ path: "" })],
+  [/code invalide \(vérifié en local/, "err_code_invalid"],
+  [/lien invalide/, "err_link_invalid"],
+  [/l'émetteur n'a pas prouvé qu'il connaît le code/, "err_sender_proof"],
+  [/la machine jointe n'est pas celle du lien/, "err_wrong_machine"],
+  [/aucun fichier à envoyer/, "err_nothing_to_send"],
+  [/des fichiers choisis ont disparu/, "err_files_gone"],
+  [/aucun fichier choisi/, "err_nothing_chosen"],
+  [/connexion perdue|connection lost|timed out|reset by peer|closed by peer/i, "err_connection_lost"],
+];
+
+function engineError(raw) {
+  const msg = String(raw ?? "");
+  for (const [re, key, vars] of ENGINE_ERRORS) {
+    const m = msg.match(re);
+    if (m) return { text: t(key, vars ? vars(m) : null).replace(" : .", ".").replace(": .", "."), raw: msg, known: true };
+  }
+  return { text: msg, raw: msg, known: false };
+}
+
 // ------------------------------------------------------------------ Moteurs
 
 function tauriBackend() {
@@ -55,6 +93,7 @@ function tauriBackend() {
   return {
     demo: false,
     pickFolder: (start) => invoke("pick_folder", { start }),
+    pickDest: (start) => invoke("pick_folder", { start }),
     pickFiles: () => invoke("pick_files"),
     scan: (paths) => invoke("scan_paths", { paths }),
     checkCode: (code) => invoke("check_code", { code }),
@@ -88,21 +127,27 @@ function demoBackend() {
   const code = () => `${String(Math.floor(Math.random() * 10000)).padStart(4, "0")}-${words[Math.floor(Math.random() * words.length)]}-${Math.floor(Math.random() * 10)}`;
   const link = "lugus://r/ng6bfcmwftaipe1e6x8tpdnhp5ijxqcixciyurigwfs3hg9ng58o?v=1";
   // Transfert simulé, puis vérification qui continue après 100 %.
+  // Débit simulé : rapide par défaut, réaliste si window.LUGUS_DEMO_RATE (octets/s)
+  // est fixé (captures du mode d'emploi).
   const run = (total, files, done) => {
     let moved = 0, checked = 0, i = 0;
+    const rate = window.LUGUS_DEMO_RATE;
+    const step = rate ? rate * 0.15 : total / 30;
     const tick = setInterval(() => {
-      moved = Math.min(total, moved + total / 30);
+      moved = Math.min(total, moved + step);
       const cap = moved >= total ? total : moved * 0.8;
-      checked = Math.min(cap, checked + (moved >= total ? total / 12 : total / 34));
+      checked = Math.min(cap, checked + (moved >= total ? (rate ? step * 2.5 : total / 12) : (rate ? step * 0.9 : total / 34)));
       handler({ type: "progress", done: Math.round(moved), verified: Math.round(checked), total, path: "direct" });
-      if (files && checked / total > (i + 1) / files.length && i < files.length) {
-        handler({ type: "file_verified", path: files[i], size: Math.round(total / files.length), uncached: true }); i++;
+      // Les fichiers sont annoncés vérifiés dans l'ordre, selon leur taille réelle.
+      while (files && i < files.length && checked >= files.slice(0, i + 1).reduce((a, f) => a + f.size, 0)) {
+        handler({ type: "file_verified", path: files[i].path, size: files[i].size, uncached: true }); i++;
       }
       if (checked >= total) { clearInterval(tick); done(); }
     }, 150);
     timers.push(tick);
   };
-  // Contenu simulé d'une journée de tournage.
+  // Contenu simulé d'une journée de tournage (« J04 » en français, « D04 » sinon).
+  const day = () => (LANG === "fr" ? "J04" : "D04");
   const demoEntries = (() => {
     const out = [];
     for (const card of ["A001", "A002"]) {
@@ -113,14 +158,15 @@ function demoBackend() {
         out.push({ path: `Proxy/${card}/${clip}_proxy.mov`, size: 6.4e8 + c * 9e7, kind: "Proxy" });
       }
     }
-    out.push({ path: "Rapport_J04.pdf", size: 2.4e5, kind: "Sidecar" });
+    out.push({ path: `${LANG === "fr" ? "Rapport" : LANG === "es" ? "Informe" : "Report"}_${day()}.pdf`, size: 2.4e5, kind: "Sidecar" });
     return out.sort((a, b) => (a.path < b.path ? -1 : 1));
   })();
   let chooseFn = null;
   return {
     demo: true,
-    pickFolder: async () => "/Volumes/RUSHES/J04",
-    pickFiles: async () => ["/Volumes/RUSHES/J04/A001/A001C001.braw", "/Volumes/RUSHES/J04/A001/A001C002.braw", "/Volumes/RUSHES/J04/A001/A001C001.sidecar.xml"],
+    pickFolder: async () => `/Volumes/RUSHES/${day()}`,
+    pickDest: async () => "/Volumes/MONTAGE/Rushes",
+    pickFiles: async () => ["A001C001.braw", "A001C002.braw", "A001C001.sidecar.xml"].map((f) => `/Volumes/RUSHES/${day()}/A001/${f}`),
     scan: async (paths) => {
       const sum = (list) => list.reduce((a, e) => a + e.size, 0);
       if (paths.length === 1 && paths[0].endsWith(".braw"))
@@ -156,17 +202,20 @@ function demoBackend() {
       const count = (k) => demoEntries.filter((e) => e.kind === k).length;
       const all = demoEntries.reduce((a, e) => a + e.size, 0);
       const go = (picked) => {
-        const chosen = picked.map((i) => demoEntries[i]);
+        // Proxys, puis annexes, puis originaux, comme le vrai moteur.
+        const rank = { Proxy: 0, Sidecar: 1, Original: 2 };
+        const chosen = picked.map((i) => demoEntries[i]).sort((a, b) => rank[a.kind] - rank[b.kind]);
         const bytes = chosen.reduce((a, e) => a + e.size, 0);
+        const started = Date.now();
         if (!o.start_at) handler({ type: "chosen", files: chosen.length, bytes });
-        run(bytes, chosen.map((e) => e.path), () => {
+        run(bytes, chosen, () => {
           handler({ type: "finalizing", step: "mhl" });
           later(900, () => handler({ type: "finalizing", step: "receipt" }));
-          later(1600, () => handler({ type: "received", files: chosen.length, bytes, seconds: 412, mhl: "/Reception/J04/J04_lugus_2026-11-14_221500.mhl", folder: "/Reception/J04", path: "direct" }));
+          later(1600, () => handler({ type: "received", files: chosen.length, bytes, seconds: (Date.now() - started) / 1000, mhl: `/Volumes/MONTAGE/Rushes/${day()}/${day()}_lugus_2026-11-15_143212.mhl`, folder: `/Volumes/MONTAGE/Rushes/${day()}`, path: "direct" }));
         });
       };
       later(d + 2500, () => {
-        handler({ type: "manifest", name: "J04", files: demoEntries.length, bytes: all, originals: count("Original"), proxies: count("Proxy"), sidecars: count("Sidecar") });
+        handler({ type: "manifest", name: day(), files: demoEntries.length, bytes: all, originals: count("Original"), proxies: count("Proxy"), sidecars: count("Sidecar") });
         if (o.start_at) go(demoEntries.map((_, i) => i));
         else { chooseFn = go; handler({ type: "choose", files: demoEntries }); }
       });
@@ -307,7 +356,7 @@ async function useSource(paths) {
   } catch (e) {
     S.source = null;
     const msg = String(e);
-    const text = msg.startsWith("lugus:") ? t(msg.slice(6)) : t("read_fail") + " : " + msg;
+    const text = msg.startsWith("lugus:") ? t(msg.slice(6)) : engineError(msg).known ? engineError(msg).text : t("read_fail") + " : " + msg;
     hint("srcHint", text, "bad");
     closePicker(); renderDrop(); renderGo();
     return;
@@ -696,7 +745,8 @@ function onEvent(e) {
     case "interrupted":
       $("share").classList.remove("hidden");
       phase("ph_interrupted", null, { key: "ph_interrupted_sub" });
-      log(t("ev_interrupted"), "warn"); log(e.message, "dim");
+      log(t("ev_interrupted"), "warn");
+      { const err = engineError(e.message); if (err.known) log(err.text, "warn"); log(err.raw, "dim"); }
       setChip("wait", "chip_waiting");
       break;
     case "delivered":
@@ -766,12 +816,15 @@ function onEvent(e) {
     // --- Commun
     case "progress": progress(e); break;
     case "end_action": log(t("ev_end_" + e.action)); break;
-    case "error":
-      if (!S.running) { log(e.message, "err"); break; }
-      phase("ph_error", null, { raw: e.message }, "bad");
-      finish(false, t("banner_error"), e.message);
-      log(e.message, "err");
+    case "error": {
+      const err = engineError(e.message);
+      if (!S.running) { log(err.text, "err"); if (err.known) log(err.raw, "dim"); break; }
+      phase("ph_error", null, { raw: err.text }, "bad");
+      finish(false, t("banner_error"), err.text);
+      log(err.text, "err");
+      if (err.known) log(err.raw, "dim");
       break;
+    }
   }
 }
 
@@ -804,8 +857,10 @@ async function go() {
       });
     }
   } catch (e) {
-    phase("ph_error", null, { raw: String(e) }, "bad");
-    finish(false, t("banner_error"), String(e));
+    const err = engineError(e);
+    phase("ph_error", null, { raw: err.text }, "bad");
+    finish(false, t("banner_error"), err.text);
+    if (err.known) log(err.raw, "dim");
   }
 }
 
@@ -879,7 +934,7 @@ function init() {
   api.onDrop((paths) => { if (S.mode !== "send") setMode("send"); useSource(paths); });
 
   $("pickDest").onclick = async () => {
-    const p = await api.pickFolder(S.dest);
+    const p = await api.pickDest(S.dest);
     if (p) { S.dest = p; store.set("dest", p); renderDest(); renderGo(); }
   };
   $("link").oninput = checkInputs;
