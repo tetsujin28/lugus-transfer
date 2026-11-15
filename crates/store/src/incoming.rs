@@ -327,6 +327,42 @@ fn with_path(err: io::Error, path: &Path) -> io::Error {
     io::Error::new(err.kind(), format!("{} : {err}", path.display()))
 }
 
+/// Octets d'un fichier déjà présents à destination, en lecture seule : la taille
+/// entière si le fichier final est là, sinon le point de reprise que donnerait
+/// `Incoming::open` (blocs journalisés dont les données sont sur le disque).
+/// Sert à afficher dès la reconnexion le même avancement des deux côtés.
+pub fn resume_point(base: &Path, entry: &FileEntry) -> u64 {
+    if !is_safe_relative_path(&entry.path) {
+        return 0;
+    }
+    let mut final_path = base.to_path_buf();
+    for part in entry.path.split('/') {
+        final_path.push(part);
+    }
+    if let Ok(metadata) = fs::metadata(&final_path) {
+        return if metadata.is_file() && metadata.len() == entry.size {
+            entry.size
+        } else {
+            0
+        };
+    }
+    let header = journal_header(entry.size, entry.modified_unix);
+    let Some(hashes) = read_journal(&with_suffix(&final_path, JOURNAL_SUFFIX), &header) else {
+        return 0;
+    };
+    if hashes.len() as u64 > entry.size.div_ceil(BLOCK_SIZE) {
+        return 0;
+    }
+    let part_len = fs::metadata(with_suffix(&final_path, PART_SUFFIX))
+        .map(|m| m.len())
+        .unwrap_or(0);
+    let mut blocks = hashes.len();
+    while blocks > 0 && covered(blocks, entry.size) > part_len {
+        blocks -= 1;
+    }
+    covered(blocks, entry.size)
+}
+
 /// Octets couverts par `blocks` blocs complets, sans dépasser la taille du fichier.
 fn covered(blocks: usize, size: u64) -> u64 {
     (blocks as u64).saturating_mul(BLOCK_SIZE).min(size)
@@ -457,11 +493,14 @@ mod tests {
         send_blocks(&mut first, &data, 0, 1);
         drop(first);
 
+        // Le point de reprise lu sans rien modifier est celui de la réouverture.
+        assert_eq!(resume_point(&base, &entry), BLOCK_SIZE);
         let mut second = partial(&base, &entry);
         assert_eq!(second.offset(), BLOCK_SIZE);
         send_blocks(&mut second, &data, 1, 3);
         second.finish(None, None).unwrap();
         assert_eq!(fs::read(base.join("A001/clip.mov")).unwrap(), data);
+        assert_eq!(resume_point(&base, &entry), data.len() as u64);
         fs::remove_dir_all(&base).unwrap();
     }
 

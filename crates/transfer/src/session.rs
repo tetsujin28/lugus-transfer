@@ -273,7 +273,7 @@ pub async fn run_sender(
         relay,
     });
     // Annulée automatiquement à la fin de la session.
-    let _publish_check = AbortOnDrop({
+    let _publish_check = AbortOnDrop::new({
         let emit = emit.clone();
         let key = beacon.key();
         tokio::spawn(async move {
@@ -514,17 +514,27 @@ async fn deliver(
 
     let sent = Arc::new(AtomicU64::new(0));
     let peer = Arc::new(PeerProgress::default());
+    // L'avancement affiché est celui du destinataire (reçu, vérifié), comme
+    // un torrent : après une reprise, les deux côtés montrent le même chiffre.
+    // Avant son premier `Status`, on montre ce qui a été envoyé.
     let read: Counters = {
         let sent = sent.clone();
         let peer = peer.clone();
         Arc::new(move || {
             (
-                sent.load(Ordering::Relaxed),
+                peer.received
+                    .load(Ordering::Relaxed)
+                    .max(sent.load(Ordering::Relaxed)),
                 peer.verified.load(Ordering::Relaxed),
             )
         })
     };
-    let ticker = spawn_progress(emit.clone(), read.clone(), total, conn.clone());
+    let ticker = AbortOnDrop::new(spawn_progress(
+        emit.clone(),
+        read.clone(),
+        total,
+        conn.clone(),
+    ));
     let result = crate::serve(
         conn.clone(),
         source.clone(),
@@ -534,7 +544,7 @@ async fn deliver(
         peer.clone(),
     )
     .await;
-    ticker.abort();
+    drop(ticker);
     let receipt = result?;
     // L'accusé prouve que tout a été vérifié chez le destinataire.
     emit(Event::Progress {
@@ -698,9 +708,20 @@ pub async fn run_receiver(
     let total: u64 = order.iter().map(|&i| manifest.files[i as usize].size).sum();
     send_msg(&mut send, &Message::Select(selection)).await?;
 
+    // Ce qui est déjà sur le disque (reprise) compte dès le départ, pour que
+    // l'avancement ne recule jamais et soit le même chez l'émetteur.
+    let already = {
+        let manifest = manifest.clone();
+        let order = order.clone();
+        let base = layout.base.clone();
+        tokio::task::spawn_blocking(move || crate::already_received(&manifest, &order, &base))
+            .await?
+    };
+    let resumed: u64 = already.iter().map(|(_, bytes)| bytes).sum();
+
     let transfer_started = Instant::now();
     let mhl_started = chrono::Local::now();
-    let received = Arc::new(AtomicU64::new(0));
+    let received = Arc::new(AtomicU64::new(resumed));
     let verified = Arc::new(AtomicU64::new(0));
     let read: Counters = {
         let received = received.clone();
@@ -712,30 +733,39 @@ pub async fn run_receiver(
             )
         })
     };
-    let ticker = spawn_progress(emit.clone(), read.clone(), total, conn.clone());
+    let ticker = AbortOnDrop::new(spawn_progress(
+        emit.clone(),
+        read.clone(),
+        total,
+        conn.clone(),
+    ));
 
     // Le flux de contrôle est partagé : `Status` régulier vers l'émetteur, puis
     // l'accusé. La tâche s'arrête d'elle-même (jamais en plein message).
     let control = Arc::new(tokio::sync::Mutex::new(send));
     let status_stop = Arc::new(AtomicBool::new(false));
+    // Premier `Status` immédiat : l'émetteur affiche tout de suite le point de
+    // reprise.
     let status_task = {
         let control = control.clone();
         let read = read.clone();
         let stop = status_stop.clone();
-        tokio::spawn(async move {
+        AbortOnDrop::new(tokio::spawn(async move {
             loop {
-                tokio::time::sleep(STATUS_INTERVAL).await;
                 if stop.load(Ordering::Relaxed) {
                     break;
                 }
                 let (received, verified) = read();
                 let message = Message::Status { received, verified };
-                let mut send = control.lock().await;
-                if send_msg(&mut send, &message).await.is_err() {
-                    break;
+                {
+                    let mut send = control.lock().await;
+                    if send_msg(&mut send, &message).await.is_err() {
+                        break;
+                    }
                 }
+                tokio::time::sleep(STATUS_INTERVAL).await;
             }
-        })
+        }))
     };
     let on_done: crate::OnFileDone = {
         let emit = emit.clone();
@@ -759,14 +789,15 @@ pub async fn run_receiver(
         order,
         layout.base.clone(),
         options.parallel,
+        already,
         received.clone(),
         verified.clone(),
         on_done,
     )
     .await;
-    ticker.abort();
+    drop(ticker);
     status_stop.store(true, Ordering::Relaxed);
-    let _ = status_task.await;
+    status_task.join().await;
     let results = result?;
     emit_progress(&emit, &read, total, &conn);
 
@@ -888,12 +919,29 @@ pub fn describe(error: &ProtocolError) -> String {
 // Commun
 // ---------------------------------------------------------------------------
 
-/// Annule une tâche de fond quand il est détruit.
-struct AbortOnDrop(tokio::task::JoinHandle<()>);
+/// Tâche de fond liée à la session : annulée quand la session s'arrête, même
+/// brutalement (bouton Arrêter). Sans cela, une tâche lancée par `tokio::spawn`
+/// survivrait à la session et continuerait d'envoyer d'anciens chiffres.
+struct AbortOnDrop(Option<tokio::task::JoinHandle<()>>);
+
+impl AbortOnDrop {
+    fn new(handle: tokio::task::JoinHandle<()>) -> Self {
+        Self(Some(handle))
+    }
+
+    /// Attend la fin normale de la tâche.
+    async fn join(mut self) {
+        if let Some(handle) = self.0.take() {
+            let _ = handle.await;
+        }
+    }
+}
 
 impl Drop for AbortOnDrop {
     fn drop(&mut self) {
-        self.0.abort();
+        if let Some(handle) = self.0.take() {
+            handle.abort();
+        }
     }
 }
 

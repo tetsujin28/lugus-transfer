@@ -17,7 +17,7 @@
 pub mod power;
 pub mod session;
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -235,18 +235,36 @@ pub fn order(manifest: &Manifest, selection: &Selection) -> Vec<u32> {
     order
 }
 
-/// Reçoit les fichiers dans `base`, `parallel` à la fois. `received` compte les
-/// octets reçus ou déjà présents.
+/// Octets déjà présents à destination pour chaque fichier de `order`, lus sans
+/// rien modifier (indice dans le manifeste, octets). Leur somme est le point de
+/// départ du compteur `received` de `fetch`.
+pub fn already_received(manifest: &Manifest, order: &[u32], base: &Path) -> Vec<(u32, u64)> {
+    order
+        .iter()
+        .filter_map(|&i| {
+            let entry = manifest.files.get(i as usize)?;
+            Some((i, lugus_store::incoming::resume_point(base, entry)))
+        })
+        .collect()
+}
+
+/// Reçoit les fichiers dans `base`, `parallel` à la fois. `received` doit déjà
+/// contenir la somme de `already` (voir `already_received`) : chaque fichier
+/// corrige ensuite l'écart avec ce qu'il trouve réellement sur le disque, pour
+/// que le compteur ne recule jamais à la reprise.
+#[allow(clippy::too_many_arguments)]
 pub async fn fetch(
     conn: &Connection,
     manifest: Arc<Manifest>,
     order: Vec<u32>,
     base: PathBuf,
     parallel: usize,
+    already: Vec<(u32, u64)>,
     received: Arc<AtomicU64>,
     verified: Arc<AtomicU64>,
     on_done: OnFileDone,
 ) -> Result<Vec<Received>> {
+    let already: Arc<HashMap<u32, u64>> = Arc::new(already.into_iter().collect());
     let queue = Arc::new(Mutex::new(VecDeque::from(order)));
     let results = Arc::new(Mutex::new(Vec::new()));
     let mut workers = JoinSet::new();
@@ -260,9 +278,14 @@ pub async fn fetch(
         let received = received.clone();
         let verified = verified.clone();
         let on_done = on_done.clone();
+        let already = already.clone();
         workers.spawn(async move {
             while let Some(index) = next_job(&queue) {
-                let done = fetch_file(&conn, &manifest, index, &base, &received, &verified).await?;
+                let counted = already.get(&index).copied().unwrap_or(0);
+                let done = fetch_file(
+                    &conn, &manifest, index, &base, counted, &received, &verified,
+                )
+                .await?;
                 on_done(&done);
                 results.lock().expect("verrou empoisonné").push(done);
             }
@@ -283,11 +306,71 @@ fn next_job(queue: &Mutex<VecDeque<u32>>) -> Option<u32> {
     queue.lock().expect("verrou empoisonné").pop_front()
 }
 
+/// Ajoute `actual` au compteur et retire `counted` (déjà compté au départ),
+/// dans cet ordre pour ne jamais passer sous zéro.
+fn settle(received: &AtomicU64, actual: u64, counted: u64) {
+    received.fetch_add(actual, Ordering::Relaxed);
+    let current = received.load(Ordering::Relaxed);
+    received.fetch_sub(counted.min(current), Ordering::Relaxed);
+}
+
+// ---------------------------------------------------------------------------
+// Fichiers occupés
+// ---------------------------------------------------------------------------
+
+/// Fichiers de destination en cours d'écriture ou de vérification dans ce
+/// processus. Après un arrêt, une vérification lancée par l'ancienne session
+/// peut encore tourner : la nouvelle session attend qu'elle se termine avant de
+/// rouvrir le même fichier.
+static BUSY: Mutex<Vec<PathBuf>> = Mutex::new(Vec::new());
+
+/// Réservation d'un fichier de destination, libérée quand elle est détruite.
+/// Elle accompagne chaque travail bloquant sur ce fichier, pour n'être libérée
+/// qu'à la fin réelle de l'écriture ou de la vérification.
+pub struct Busy(PathBuf);
+
+impl Busy {
+    pub fn try_take(path: &Path) -> Option<Busy> {
+        let mut busy = BUSY.lock().expect("verrou empoisonné");
+        if busy.iter().any(|p| p == path) {
+            return None;
+        }
+        busy.push(path.to_path_buf());
+        Some(Busy(path.to_path_buf()))
+    }
+
+    pub async fn take(path: &Path) -> Busy {
+        loop {
+            if let Some(busy) = Busy::try_take(path) {
+                return busy;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+        }
+    }
+}
+
+impl Drop for Busy {
+    fn drop(&mut self) {
+        if let Ok(mut busy) = BUSY.lock() {
+            busy.retain(|p| p != &self.0);
+        }
+    }
+}
+
+fn destination(base: &Path, entry_path: &str) -> PathBuf {
+    let mut path = base.to_path_buf();
+    for part in entry_path.split('/') {
+        path.push(part);
+    }
+    path
+}
+
 async fn fetch_file(
     conn: &Connection,
     manifest: &Manifest,
     index: u32,
     base: &Path,
+    counted: u64,
     received: &AtomicU64,
     verified: &Arc<AtomicU64>,
 ) -> Result<Received> {
@@ -297,16 +380,19 @@ async fn fetch_file(
         .context("indice de fichier invalide")?
         .clone();
 
-    let opened = {
+    let busy = Busy::take(&destination(base, &entry.path)).await;
+    let (opened, busy) = {
         let base = base.to_path_buf();
         let entry = entry.clone();
-        spawn_blocking(move || Incoming::open(&base, &entry)).await??
+        spawn_blocking(move || (Incoming::open(&base, &entry), busy)).await?
     };
+    let opened = opened?;
 
     let (mut send, mut recv) = conn.open_bi().await.map_err(net_err)?;
 
     match opened {
         Opened::Present(path) => {
+            settle(received, entry.size, counted);
             // Déjà là : on demande seulement le hash de la source pour comparer.
             let request = Message::Request {
                 file: index,
@@ -316,14 +402,17 @@ async fn fetch_file(
             send.finish().map_err(net_err)?;
             let source_hash = expect_done(&mut recv, &entry.path).await?;
             let reread = verified.clone();
-            let local = spawn_blocking(move || hash_file(&path, Some(&reread))).await??;
+            let local = spawn_blocking(move || {
+                let _busy = busy;
+                hash_file(&path, Some(&reread))
+            })
+            .await??;
             if source_hash != Some(local.blake3) {
                 bail!(
                     "{} existe déjà à destination mais diffère de la source",
                     entry.path
                 );
             }
-            received.fetch_add(entry.size, Ordering::Relaxed);
             Ok(Received {
                 index,
                 path: entry.path,
@@ -331,8 +420,9 @@ async fn fetch_file(
             })
         }
         Opened::Partial(mut incoming) => {
+            let mut busy = busy;
             let offset = incoming.offset();
-            received.fetch_add(offset, Ordering::Relaxed);
+            settle(received, offset, counted);
             send_msg(
                 &mut send,
                 &Message::Request {
@@ -351,21 +441,24 @@ async fn fetch_file(
                         }
                         let mut data = vec![0u8; len as usize];
                         recv.read_exact(&mut data).await.map_err(net_err)?;
-                        let (back, result) = spawn_blocking(move || {
+                        let (back, held, result) = spawn_blocking(move || {
                             let result = incoming.write_block(offset, &data, &hash);
-                            (incoming, result)
+                            (incoming, busy, result)
                         })
                         .await?;
                         incoming = back;
+                        busy = held;
                         result.with_context(|| format!("écriture de {}", entry.path))?;
                         received.fetch_add(u64::from(len), Ordering::Relaxed);
                     }
                     Message::FileDone { full_hash } => {
                         let reread = verified.clone();
-                        let result =
-                            spawn_blocking(move || incoming.finish(full_hash, Some(&reread)))
-                                .await?
-                                .with_context(|| format!("vérification de {}", entry.path))?;
+                        let result = spawn_blocking(move || {
+                            let _busy = busy;
+                            incoming.finish(full_hash, Some(&reread))
+                        })
+                        .await?
+                        .with_context(|| format!("vérification de {}", entry.path))?;
                         return Ok(Received {
                             index,
                             path: entry.path,
@@ -451,6 +544,27 @@ mod tests {
             proxies_first: false,
         };
         assert_eq!(order(&manifest, &as_is), vec![0, 2]);
+    }
+
+    #[test]
+    fn busy_file_is_reserved_until_released() {
+        let path = std::env::temp_dir().join("lugus-busy-test/A001/clip.mov");
+        let first = Busy::try_take(&path).expect("libre au départ");
+        assert!(Busy::try_take(&path).is_none(), "déjà réservé");
+        let other = Busy::try_take(&path.with_file_name("clip2.mov")).expect("autre fichier libre");
+        drop(first);
+        assert!(Busy::try_take(&path).is_some(), "libéré");
+        drop(other);
+    }
+
+    #[test]
+    fn counter_never_goes_below_zero() {
+        let received = AtomicU64::new(0);
+        settle(&received, 0, 10);
+        assert_eq!(received.load(Ordering::Relaxed), 0);
+        received.store(100, Ordering::Relaxed);
+        settle(&received, 40, 30);
+        assert_eq!(received.load(Ordering::Relaxed), 110);
     }
 
     #[test]

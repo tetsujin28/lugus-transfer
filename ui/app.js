@@ -567,6 +567,9 @@ function startProgress(total) {
 function progress(e) {
   const now = Date.now();
   const verified = e.verified ?? 0;
+  // Les premiers instants montent d'un coup au point de reprise : ce n'est pas
+  // du débit, la mesure démarre après.
+  if (now - S.startT < 1500) S.samples = [];
   S.samples.push([now, e.done]);
   while (S.samples.length > 2 && now - S.samples[0][0] > 6000) S.samples.shift();
   const [t0, d0] = S.samples[0];
