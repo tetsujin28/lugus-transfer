@@ -282,8 +282,18 @@ function renderDrop() {
   const partial = S.pick?.side === "send" && S.pick.on.size < S.pick.entries.length;
   const files = partial ? `${S.pick.on.size} / ${S.source.files}` : S.source.files;
   const bytes = partial ? S.pick.entries.filter((_, i) => S.pick.on.has(i)).reduce((a, e) => a + e.size, 0) : S.source.bytes;
-  d.innerHTML = `<div class="path">${esc(S.source.path)}</div>
+  d.innerHTML = `${S.running ? "" : `<button class="clear" id="clearSource" title="${esc(t("clear_source_title"))}">✕ ${esc(t("clear_source"))}</button>`}<div class="path">${esc(S.source.path)}</div>
     <div class="stats"><span>${esc(t("files_word"))} <b>${files}</b></span><span>${esc(t("size_word"))} <b>${fmtBytes(bytes)}</b></span></div>`;
+}
+
+// Vide ce qui a été choisi pour l'envoi et revient à l'état de départ.
+function clearSource() {
+  if (S.running) return;
+  S.source = null; S.sendPick = null;
+  hint("srcHint", "");
+  closePicker();
+  resetRight();
+  renderDrop(); renderGo();
 }
 
 // Un dossier, un fichier, ou plusieurs éléments d'un même dossier.
@@ -346,6 +356,7 @@ function renderGo() {
     go.disabled = S.running || !S.linkOk || !S.codeOk || !S.dest;
   }
   go.classList.toggle("hidden", S.running);
+  if (S.mode === "send" && S.source) $("clearSource")?.classList.toggle("hidden", S.running);
   $("stop").classList.toggle("hidden", !S.running);
   $("modeSend").disabled = S.running; $("modeRecv").disabled = S.running;
 }
@@ -852,7 +863,10 @@ function init() {
   $("modeSend").onclick = () => setMode("send");
   $("modeRecv").onclick = () => setMode("recv");
 
-  $("drop").onclick = async () => useSource(await api.pickFolder(store.get("lastSource", null)));
+  $("drop").onclick = async (ev) => {
+    if (ev.target.closest("#clearSource")) { ev.stopPropagation(); return clearSource(); }
+    useSource(await api.pickFolder(store.get("lastSource", null)));
+  };
   $("pickFolder").onclick = async () => useSource(await api.pickFolder(store.get("lastSource", null)));
   $("pickFiles").onclick = async () => useSource(await api.pickFiles());
   api.onDrop((paths) => { if (S.mode !== "send") setMode("send"); useSource(paths); });
