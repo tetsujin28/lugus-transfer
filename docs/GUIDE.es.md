@@ -3,7 +3,7 @@
 </p>
 
 <h1 align="center">Lugus Transfer, manual de uso</h1>
-<p align="center"><b>Versión 0.1.0 (beta) · Windows y macOS</b></p>
+<p align="center"><b>Versión 0.2.0 (beta) · Windows y macOS</b></p>
 <p align="center">
   <a href="GUIDE.md">English</a> · <a href="GUIDE.fr.md">Français</a> · <b>Español</b>
 </p>
@@ -67,8 +67,8 @@ En el primer arranque, Lugus Transfer muestra un aviso de exención de responsab
 <p align="center"><img src="guide/01_interface_es.png" width="860" alt="La interfaz de Lugus Transfer"></p>
 
 1. **Enviar / Recibir**: los dos modos de la aplicación. La misma aplicación sirve en los dos lados.
-2. **Zona de depósito**: suelta aquí una carpeta, un archivo o varios archivos.
-3. **Elegir una carpeta / Elegir archivos**: lo mismo con la ventana del sistema. «Elegir archivos» permite seleccionar varios a la vez.
+2. **Zona de depósito**: suelta aquí carpetas o archivos. Cada depósito se suma a lo que ya está.
+3. **Elegir una carpeta / Elegir archivos**: lo mismo con la ventana del sistema, y también se suma a lo que ya está. «Elegir archivos» permite seleccionar varios a la vez.
 4. **Tras la entrega**: no hacer nada, suspender el ordenador o apagarlo cuando el destinatario haya confirmado la entrega.
 5. **Botón principal**: **Crear el enlace** para enviar, **Recibir** para recibir, y después **Detener** durante una transferencia.
 6. **FR / EN / ES**: cambia al instante el idioma de la interfaz.
@@ -90,7 +90,8 @@ La línea **El equipo permanece despierto durante la transferencia** recuerda qu
 
 Suelta una carpeta en la ventana o haz clic en **Elegir una carpeta**. También puedes enviar:
 - **un solo archivo**: llegará solo a la carpeta del destinatario;
-- **varios archivos**: suéltalos juntos o selecciónalos con **Elegir archivos**. Deben venir de la misma carpeta.
+- **varios archivos**: suéltalos juntos o selecciónalos con **Elegir archivos**;
+- **varios lugares**: dos discos, o dos carpetas en sitios distintos. Suelta o elige la primera y luego la segunda: se suma, no reemplaza. Cada fuente tiene una ✕ para quitarla, y **Quitar todo** vuelve a empezar. Si añades una carpeta que ya está dentro de otra añadida, no se envía dos veces.
 
 Cuando eliges una carpeta o varios archivos, su contenido aparece a la derecha, todo marcado:
 
@@ -178,7 +179,7 @@ Haz clic en **Recibir**, arriba a la izquierda.
 
 1. **Enlace**: pega el enlace que te han enviado. *Enlace válido* confirma su forma.
 2. **Código**: escribe el código. Se comprueba en tu ordenador antes de cualquier envío: una errata se detecta en el acto y **nunca gasta un intento**.
-3. **Destino**: haz clic en **Elegir** y selecciona la carpeta donde llegará el material. Una carpeta llega en una subcarpeta con su nombre, igual que varios archivos enviados juntos (con el nombre de la carpeta de la que vienen). Un archivo solo llega directamente al destino.
+3. **Destino**: haz clic en **Elegir** y selecciona la carpeta donde llegará el material. Una carpeta llega en una subcarpeta con su nombre, igual que varios archivos enviados juntos (con el nombre de la carpeta de la que vienen). Cuando el material viene de varios lugares, llega en una carpeta `Rushes_<fecha>` con una subcarpeta por cada fuente, con el nombre de la carpeta o del disco (se añade `_2` si dos fuentes tienen el mismo nombre). Un archivo solo llega directamente al destino.
 4. **Modo Noctiluca**: para recibir de noche (ver la sección 6).
 5. **Recibir**: inicia la recepción.
 

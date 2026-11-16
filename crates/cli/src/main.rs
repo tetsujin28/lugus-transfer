@@ -15,7 +15,7 @@ use lugus_transfer::power::EndAction;
 use lugus_transfer::session::{
     run_receiver, run_sender, Emit, Event, ReceiveOptions, SendOptions, SenderCommand,
 };
-use lugus_transfer::DEFAULT_PARALLEL_FILES;
+use lugus_transfer::{SourceSpec, DEFAULT_PARALLEL_FILES};
 use tokio::sync::mpsc;
 
 #[derive(Parser)]
@@ -33,8 +33,10 @@ struct Cli {
 enum Command {
     /// Envoie un fichier ou un dossier : affiche un lien et un code à partager.
     Send {
-        /// Fichier ou dossier à envoyer
-        path: PathBuf,
+        /// Fichiers ou dossiers à envoyer (plusieurs endroits possibles : chacun
+        /// arrive dans son propre sous-dossier)
+        #[arg(required = true)]
+        paths: Vec<PathBuf>,
         /// Après la livraison : rien, veille ou extinction
         #[arg(long, default_value = "rien")]
         apres: EndAction,
@@ -70,14 +72,16 @@ enum Command {
 async fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Command::Send { path, apres } => {
+        Command::Send { paths, apres } => {
             warn_if_wordlist_is_small();
             let (commands, receiver) = mpsc::unbounded_channel();
             let emit = printer(Some(commands));
             run_sender(
                 SendOptions {
-                    path,
-                    only: None,
+                    sources: paths
+                        .into_iter()
+                        .map(|path| SourceSpec { path, only: None })
+                        .collect(),
                     end_action: apres,
                 },
                 emit,

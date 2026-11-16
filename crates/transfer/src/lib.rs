@@ -30,6 +30,7 @@ use lugus_noctiluca::{
     net_err, recv_msg, send_msg, Connection, RecvStream, SendStream, HANDSHAKE_MAX_LEN,
 };
 use lugus_store::incoming::{hash_file, Incoming, Opened, Verified};
+use lugus_store::SourcePart;
 use tokio::io::AsyncReadExt;
 use tokio::task::{spawn_blocking, JoinSet};
 
@@ -40,9 +41,18 @@ pub const DEFAULT_PARALLEL_FILES: usize = 4;
 // Émetteur
 // ---------------------------------------------------------------------------
 
-/// Contenu proposé par l'émetteur : le manifeste et le dossier où le lire.
+/// Une source à envoyer : un fichier ou un dossier, ou seulement certains de
+/// ses éléments (`only`, chemins relatifs au dossier, séparateur `/`).
+#[derive(Debug, Clone, serde::Deserialize)]
+pub struct SourceSpec {
+    pub path: PathBuf,
+    #[serde(default)]
+    pub only: Option<Vec<String>>,
+}
+
+/// Contenu proposé par l'émetteur : le manifeste et les dossiers où le lire.
 pub struct Source {
-    root: PathBuf,
+    parts: Vec<SourcePart>,
     manifest: Manifest,
 }
 
@@ -55,21 +65,45 @@ impl Source {
     /// séparateur `/`) s'ils sont donnés. Seuls les éléments concernés sont
     /// relus, pas tout le dossier.
     pub fn with_selection(path: &Path, only: Option<&[String]>) -> std::io::Result<Self> {
-        let manifest = match only {
-            Some(only) => {
-                let parts = lugus_store::scan_parts(path, &lugus_store::top_levels(only))?;
-                lugus_store::keep_only(parts, only)?
-            }
-            None => lugus_store::scan(path)?,
-        };
-        Ok(Self {
-            root: lugus_store::source_root(path)?,
-            manifest,
-        })
+        Self::from_specs(&[SourceSpec {
+            path: path.to_path_buf(),
+            only: only.map(<[String]>::to_vec),
+        }])
+    }
+
+    /// Une ou plusieurs sources, qui peuvent venir de disques ou de dossiers
+    /// différents (voir `lugus_store::combine` pour la disposition à l'arrivée).
+    pub fn from_specs(specs: &[SourceSpec]) -> std::io::Result<Self> {
+        let mut scanned = Vec::new();
+        for spec in specs {
+            let manifest = match &spec.only {
+                Some(only) => {
+                    let parts =
+                        lugus_store::scan_parts(&spec.path, &lugus_store::top_levels(only))?;
+                    lugus_store::keep_only(parts, only)?
+                }
+                None => lugus_store::scan(&spec.path)?,
+            };
+            scanned.push((manifest, lugus_store::source_root(&spec.path)?));
+        }
+        let (manifest, parts) = lugus_store::combine(scanned)?;
+        Ok(Self { parts, manifest })
     }
 
     pub fn manifest(&self) -> &Manifest {
         &self.manifest
+    }
+
+    /// Où lire un fichier du manifeste sur le disque de l'émetteur.
+    fn path_of(&self, entry: &lugus_core::protocol::FileEntry) -> PathBuf {
+        let part = self
+            .parts
+            .iter()
+            .find(|p| !p.prefix.is_empty() && entry.path.starts_with(&p.prefix))
+            .or_else(|| self.parts.first())
+            .expect("au moins une source");
+        let relative = entry.path.strip_prefix(&part.prefix).unwrap_or(&entry.path);
+        lugus_store::join_relative(&part.root, relative)
     }
 }
 
@@ -151,7 +185,7 @@ async fn serve_file(
         return refuse(&mut send, ProtocolError::BadMessage).await;
     }
 
-    let path = lugus_store::source_path(&source.root, entry);
+    let path = source.path_of(entry);
     let Ok(mut reader) = tokio::fs::File::open(&path).await else {
         return refuse(&mut send, ProtocolError::FileUnavailable).await;
     };
@@ -521,6 +555,53 @@ mod tests {
             kind,
             root_hash: None,
         }
+    }
+
+    #[test]
+    fn two_places_are_each_read_from_their_own_folder() {
+        let base = std::env::temp_dir().join(format!("lugus-sources-{}", std::process::id()));
+        let cam = base.join("disque1").join("A001");
+        let proxys = base.join("disque2").join("Proxys");
+        std::fs::create_dir_all(&cam).unwrap();
+        std::fs::create_dir_all(&proxys).unwrap();
+        std::fs::write(cam.join("clip.mov"), b"original").unwrap();
+        std::fs::write(proxys.join("clip.mp4"), b"proxy").unwrap();
+
+        let source = Source::from_specs(&[
+            SourceSpec {
+                path: cam.clone(),
+                only: None,
+            },
+            SourceSpec {
+                path: proxys.clone(),
+                only: None,
+            },
+        ])
+        .unwrap();
+
+        let manifest = source.manifest();
+        let paths: Vec<&str> = manifest.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(paths, ["A001/clip.mov", "Proxys/clip.mp4"]);
+        assert_eq!(source.path_of(&manifest.files[0]), cam.join("clip.mov"));
+        assert_eq!(source.path_of(&manifest.files[1]), proxys.join("clip.mp4"));
+        let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn one_source_keeps_its_layout() {
+        let base = std::env::temp_dir().join(format!("lugus-une-source-{}", std::process::id()));
+        let dir = base.join("J04");
+        std::fs::create_dir_all(dir.join("A001")).unwrap();
+        std::fs::write(dir.join("A001").join("clip.mov"), b"x").unwrap();
+
+        let source = Source::new(&dir).unwrap();
+        assert_eq!(source.manifest().name, "J04");
+        assert_eq!(source.manifest().files[0].path, "A001/clip.mov");
+        assert_eq!(
+            source.path_of(&source.manifest().files[0]),
+            dir.join("A001").join("clip.mov")
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]
