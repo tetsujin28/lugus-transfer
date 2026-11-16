@@ -369,8 +369,9 @@ function clearSource() {
 function sourceNames() {
   const taken = [], names = [];
   for (const x of S.sources) {
-    let name = x.root_name, n = 2;
-    while (taken.includes(name.toLowerCase())) name = `${x.root_name}_${n++}`;
+    const base = x.root_name || x.root.split(/[\\/]/).filter(Boolean).pop() || x.name || "Rushes";
+    let name = base, n = 2;
+    while (taken.includes(name.toLowerCase())) name = `${base}_${n++}`;
     taken.push(name.toLowerCase()); names.push(name);
   }
   return names;
@@ -422,17 +423,21 @@ function inside(child, parent) {
 }
 
 // Ajoute les sources trouvées. Un dossier déjà envoyé en entier contient déjà ce
-// qu'on y ajoute : on ne l'envoie pas deux fois. Renvoie `true` si quelque chose
-// a été ignoré pour cette raison.
+// qu'on y ajoute : on ne l'envoie pas deux fois. Renvoie la clé du message à
+// montrer quand quelque chose a été ignoré ou absorbé pour cette raison.
 function addSummaries(found) {
-  let skipped = false;
+  let note = "";
   for (const n of found) {
-    if (S.sources.some((x) => x.whole && inside(n.root, x.root))) { skipped = true; continue; }
-    if (n.whole) S.sources = S.sources.filter((x) => !inside(x.root, n.root));
+    if (S.sources.some((x) => x.whole && inside(n.root, x.root))) { note = "already_included"; continue; }
+    if (n.whole) {
+      const kept = S.sources.filter((x) => !inside(x.root, n.root));
+      if (kept.length < S.sources.length) note = "absorbed";
+      S.sources = kept;
+    }
     const k = S.sources.findIndex((x) => x.root === n.root);
     if (k < 0) S.sources.push(n); else S.sources[k] = mergeSource(S.sources[k], n);
   }
-  return skipped;
+  return note;
 }
 
 // Ce qui est glissé ou choisi s'ajoute à ce qui est déjà là : dossiers, fichiers,
@@ -450,11 +455,15 @@ async function addSources(paths) {
     hint("srcHint", text, "bad");
     return;
   }
-  const off = offKeys();
-  const skipped = addSummaries(found);
-  store.set("lastSource", found[found.length - 1].path);
-  hint("srcHint", skipped ? t("already_included") : "");
-  syncSendPicker(off);
+  try {
+    const off = offKeys();
+    const note = addSummaries(found);
+    store.set("lastSource", found[found.length - 1].path);
+    hint("srcHint", note ? t(note) : "");
+    syncSendPicker(off);
+  } catch (e) {
+    hint("srcHint", t("read_fail") + " : " + e, "bad");
+  }
   renderDrop(); renderGo();
 }
 

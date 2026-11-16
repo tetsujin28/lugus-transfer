@@ -43,6 +43,8 @@ struct PathSummary {
     /// Dossier où se lisent les chemins de `entries` (le dossier lui-même, ou le
     /// dossier du fichier). Deux ajouts de même `root` sont fusionnés.
     root: String,
+    /// Nom de ce dossier tel que le verra le destinataire (nom du dossier ou du disque).
+    root_name: String,
     name: String,
     files: usize,
     bytes: u64,
@@ -159,6 +161,7 @@ fn build_summary(
     PathSummary {
         path: path.display().to_string(),
         root: root.display().to_string(),
+        root_name: lugus_store::content_name(root),
         name: manifest.name.clone(),
         files: manifest.files.len(),
         bytes: manifest.total_bytes(),
