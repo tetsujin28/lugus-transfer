@@ -7,7 +7,7 @@
 //! sessions par l'événement `lugus` (voir `lugus_transfer::session::Event`).
 //! Une seule session à la fois, envoi ou réception, annulable.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use lugus_core::code::AccessCode;
@@ -38,16 +38,22 @@ struct AppState {
 
 #[derive(serde::Serialize)]
 struct PathSummary {
+    /// Ce qui est envoyé : le dossier, ou le fichier seul.
     path: String,
+    /// Dossier où se lisent les chemins de `entries` (le dossier lui-même, ou le
+    /// dossier du fichier). Deux ajouts de même `root` sont fusionnés.
+    root: String,
     name: String,
     files: usize,
     bytes: u64,
     /// `true` pour un dossier ou plusieurs éléments : l'interface propose alors
     /// de choisir les fichiers.
     folder: bool,
+    /// `true` quand tout un dossier est envoyé (ni fichier seul, ni sélection).
+    whole: bool,
     entries: Vec<EntryInfo>,
     /// Plusieurs éléments d'un même dossier : les fichiers concernés, à passer
-    /// tels quels à l'envoi (`SendOptions::only`). Absent : tout `path`.
+    /// tels quels à l'envoi (`SourceSpec::only`). Absent : tout `path`.
     only: Option<Vec<String>>,
 }
 
@@ -81,46 +87,83 @@ async fn pick_files(app: AppHandle) -> Option<Vec<String>> {
         .map(|files| files.into_iter().map(|p| p.to_string()).collect())
 }
 
-/// Résumé de ce qui a été choisi ou glissé avant l'envoi : un dossier, un
-/// fichier, ou plusieurs éléments d'un même dossier. Erreur `lugus:` + clé de
+/// Résumé de ce qui a été choisi ou glissé avant l'envoi. Chaque dossier, fichier
+/// seul ou groupe d'éléments d'un même dossier devient une source ; des éléments
+/// de dossiers différents donnent plusieurs sources. Erreur `lugus:` + clé de
 /// traduction pour les cas expliqués par l'interface.
 #[tauri::command]
-async fn scan_paths(paths: Vec<String>) -> Result<PathSummary, String> {
+async fn scan_paths(paths: Vec<String>) -> Result<Vec<PathSummary>, String> {
     tauri::async_runtime::spawn_blocking(move || summarize(paths))
         .await
         .map_err(|e| e.to_string())?
 }
 
-fn summarize(paths: Vec<String>) -> Result<PathSummary, String> {
+fn summarize(paths: Vec<String>) -> Result<Vec<PathSummary>, String> {
     let items: Vec<PathBuf> = paths.iter().map(PathBuf::from).collect();
-    let (root, manifest, only) = match items.as_slice() {
-        [] => return Err("lugus:err_nothing".into()),
-        [one] => (
-            one.clone(),
-            lugus_store::scan(one).map_err(|e| e.to_string())?,
-            None,
-        ),
-        [first, ..] => {
-            let parent = first.parent().ok_or("lugus:err_same_folder")?.to_path_buf();
-            if items.iter().any(|p| p.parent() != Some(parent.as_path())) {
-                return Err("lugus:err_same_folder".into());
-            }
-            let tops: Vec<String> = items
-                .iter()
-                .filter_map(|p| p.file_name())
-                .map(|n| n.to_string_lossy().into_owned())
-                .collect();
-            let manifest = lugus_store::scan_parts(&parent, &tops).map_err(|e| e.to_string())?;
-            let only = manifest.files.iter().map(|f| f.path.clone()).collect();
-            (parent, manifest, Some(only))
+    if items.is_empty() {
+        return Err("lugus:err_nothing".into());
+    }
+
+    // Les éléments d'un même dossier forment une source ; une racine de disque,
+    // qui n'a pas de dossier parent, est une source à elle seule.
+    let mut groups: Vec<(Option<PathBuf>, Vec<PathBuf>)> = Vec::new();
+    for item in items {
+        let parent = item
+            .parent()
+            .filter(|p| !p.as_os_str().is_empty())
+            .map(Path::to_path_buf);
+        match groups
+            .iter_mut()
+            .find(|(known, _)| parent.is_some() && *known == parent)
+        {
+            Some((_, members)) => members.push(item),
+            None => groups.push((parent, vec![item])),
         }
-    };
-    Ok(PathSummary {
-        path: root.display().to_string(),
+    }
+
+    groups
+        .into_iter()
+        .map(|(parent, members)| match (parent, members.as_slice()) {
+            (Some(parent), [_, _, ..]) => summarize_parts(&parent, &members),
+            (_, [one]) => summarize_one(one),
+            _ => Err("lugus:err_nothing".to_string()),
+        })
+        .collect()
+}
+
+/// Un dossier ou un fichier seul.
+fn summarize_one(path: &Path) -> Result<PathSummary, String> {
+    let manifest = lugus_store::scan(path).map_err(|e| e.to_string())?;
+    let root = lugus_store::source_root(path).map_err(|e| e.to_string())?;
+    Ok(build_summary(path, &root, manifest, None))
+}
+
+/// Plusieurs éléments d'un même dossier.
+fn summarize_parts(parent: &Path, items: &[PathBuf]) -> Result<PathSummary, String> {
+    let tops: Vec<String> = items
+        .iter()
+        .filter_map(|p| p.file_name())
+        .map(|n| n.to_string_lossy().into_owned())
+        .collect();
+    let manifest = lugus_store::scan_parts(parent, &tops).map_err(|e| e.to_string())?;
+    let only = manifest.files.iter().map(|f| f.path.clone()).collect();
+    Ok(build_summary(parent, parent, manifest, Some(only)))
+}
+
+fn build_summary(
+    path: &Path,
+    root: &Path,
+    manifest: lugus_core::protocol::Manifest,
+    only: Option<Vec<String>>,
+) -> PathSummary {
+    PathSummary {
+        path: path.display().to_string(),
+        root: root.display().to_string(),
         name: manifest.name.clone(),
         files: manifest.files.len(),
         bytes: manifest.total_bytes(),
-        folder: root.is_dir(),
+        folder: path.is_dir(),
+        whole: path.is_dir() && only.is_none(),
         entries: manifest
             .files
             .iter()
@@ -131,7 +174,7 @@ fn summarize(paths: Vec<String>) -> Result<PathSummary, String> {
             })
             .collect(),
         only,
-    })
+    }
 }
 
 /// Vérifie un code en local (forme, mot, chiffre de contrôle). Aucun réseau.

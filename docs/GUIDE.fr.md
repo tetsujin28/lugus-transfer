@@ -3,7 +3,7 @@
 </p>
 
 <h1 align="center">Lugus Transfer, mode d'emploi</h1>
-<p align="center"><b>Version 0.1.0 (bêta) · Windows et macOS</b></p>
+<p align="center"><b>Version 0.2.0 (bêta) · Windows et macOS</b></p>
 <p align="center">
   <a href="GUIDE.md">English</a> · <b>Français</b> · <a href="GUIDE.es.md">Español</a>
 </p>
@@ -67,8 +67,8 @@ Au premier lancement, Lugus Transfer affiche un avertissement de non-responsabil
 <p align="center"><img src="guide/01_interface_fr.png" width="860" alt="L'interface de Lugus Transfer"></p>
 
 1. **Envoyer / Recevoir** : les deux modes de l'application. La même application sert des deux côtés.
-2. **Zone de dépôt** : déposez-y un dossier, un fichier ou plusieurs fichiers.
-3. **Choisir un dossier / Choisir des fichiers** : la même chose avec la fenêtre du système. « Choisir des fichiers » permet d'en sélectionner plusieurs d'un coup.
+2. **Zone de dépôt** : déposez-y des dossiers ou des fichiers. Chaque dépôt s'ajoute à ce qui est déjà là.
+3. **Choisir un dossier / Choisir des fichiers** : la même chose avec la fenêtre du système, et cela s'ajoute aussi à ce qui est là. « Choisir des fichiers » permet d'en sélectionner plusieurs d'un coup.
 4. **Après la livraison** : ne rien faire, mettre l'ordinateur en veille ou l'éteindre une fois la livraison confirmée par le destinataire.
 5. **Bouton principal** : **Créer le lien** pour envoyer, **Recevoir** pour recevoir, puis **Arrêter** pendant un transfert.
 6. **FR / EN / ES** : change instantanément la langue de l'interface.
@@ -90,7 +90,8 @@ La ligne **La machine reste éveillée pendant le transfert** rappelle que Lugus
 
 Déposez un dossier sur la fenêtre, ou cliquez sur **Choisir un dossier**. Vous pouvez aussi envoyer :
 - **un seul fichier** : il arrivera seul dans le dossier du destinataire ;
-- **plusieurs fichiers** : déposez-les ensemble, ou sélectionnez-les avec **Choisir des fichiers**. Ils doivent venir du même dossier.
+- **plusieurs fichiers** : déposez-les ensemble, ou sélectionnez-les avec **Choisir des fichiers** ;
+- **plusieurs endroits** : deux disques, ou deux dossiers placés à des endroits différents. Déposez ou choisissez le premier, puis le second : il s'ajoute, il ne remplace pas. Chaque source a une ✕ pour la retirer, et **Tout retirer** recommence. Si vous ajoutez un dossier qui se trouve déjà dans un dossier ajouté, il n'est pas envoyé deux fois.
 
 Quand vous choisissez un dossier ou plusieurs fichiers, leur contenu s'affiche à droite, tout coché :
 
@@ -178,7 +179,7 @@ Cliquez sur **Recevoir**, en haut à gauche.
 
 1. **Lien** : collez le lien reçu. *Lien valide* confirme sa forme.
 2. **Code** : tapez le code. Il est vérifié sur votre ordinateur avant tout envoi : une faute de frappe est repérée tout de suite et **ne consomme jamais d'essai**.
-3. **Destination** : cliquez sur **Choisir** et sélectionnez le dossier où arriveront les rushes. Un dossier arrive dans un sous-dossier à son nom, de même que plusieurs fichiers envoyés ensemble (au nom du dossier d'où ils viennent). Un fichier seul arrive directement dans la destination.
+3. **Destination** : cliquez sur **Choisir** et sélectionnez le dossier où arriveront les rushes. Un dossier arrive dans un sous-dossier à son nom, de même que plusieurs fichiers envoyés ensemble (au nom du dossier d'où ils viennent). Quand les rushes viennent de plusieurs endroits, ils arrivent dans un dossier `Rushes_<date>` qui contient un sous-dossier par source, au nom du dossier ou du disque (`_2` s'ajoute si deux sources portent le même nom). Un fichier seul arrive directement dans la destination.
 4. **Mode Noctiluca** : pour recevoir pendant la nuit (voir la section 6).
 5. **Recevoir** : lance la réception.
 

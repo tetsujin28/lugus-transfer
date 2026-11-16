@@ -1,7 +1,7 @@
 # Lugus Transfer : où j'en suis et ce qui vient
 
 Mes notes de travail sur Lugus Transfer : l'état du projet, mes choix et la suite.
-Dernière mise à jour : 15 novembre 2026 (préparation de la v0.1.0).
+Dernière mise à jour : 16 novembre 2026 (v0.2.0 en préparation).
 
 ## Le projet
 
@@ -15,7 +15,7 @@ C'est l'application sœur de **Bandua** (déchargement), de **Bandua MHL Compani
 
 - Dépôt : https://github.com/tetsujin28/lugus-transfer (public)
 - Site : https://tetsujin28.github.io
-- Version : v0.1.0 (pré-version bêta), en préparation
+- Version : v0.1.0 publiée (pré-version bêta), v0.2.0 en préparation
 
 ## Feuille de route, par ordre de priorité
 
@@ -34,6 +34,13 @@ C'est l'application sœur de **Bandua** (déchargement), de **Bandua MHL Compani
 - ✅ Anti-veille, mode Noctiluca (réception programmée, puis veille ou extinction)
 - ✅ Interface en français, anglais et espagnol, y compris les messages d'erreur du moteur
 - ✅ README, mode d'emploi avec captures annotées, page sur le site
+
+### 1 bis. Version 0.2 : plusieurs sources
+- ✅ Envoyer des rushes qui viennent de plusieurs endroits (deux disques, ou deux dossiers placés à des endroits différents) en un seul lien
+- ✅ Chaque dépôt ou choix s'ajoute à ce qui est déjà là au lieu de le remplacer ; une ✕ par source, et « Tout retirer » pour recommencer
+- ✅ À l'arrivée : un dossier `Rushes_<date>` avec un sous-dossier par source, nommé comme le dossier ou le disque (`_2` si deux sources ont le même nom)
+- ✅ Un dossier déjà inclus dans un dossier ajouté n'est pas envoyé deux fois
+- ✅ La ligne de commande accepte plusieurs chemins : `lugus send <chemin> <chemin>`
 
 ### 2. Tests en conditions réelles
 - Transferts entre mon PC et mon Mac, à distance, sur des réseaux différents (fibre, 4G, réseau d'hôtel ou de bureau très fermé) pour voir quand le relais prend le relais

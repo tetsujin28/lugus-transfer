@@ -34,7 +34,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 
 use crate::power::{self, Awake, EndAction};
-use crate::{PeerProgress, Received, Source, DEFAULT_PARALLEL_FILES};
+use crate::{PeerProgress, Received, Source, SourceSpec, DEFAULT_PARALLEL_FILES};
 
 /// Délai maximal pour trouver l'émetteur dans la DHT et s'y connecter.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(90);
@@ -211,11 +211,8 @@ pub enum SenderCommand {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct SendOptions {
-    pub path: PathBuf,
-    /// Fichiers choisis dans le dossier (chemins relatifs, séparateur `/`).
-    /// Absent : tout le dossier.
-    #[serde(default)]
-    pub only: Option<Vec<String>>,
+    /// Une ou plusieurs sources (dossiers, fichiers, disques différents).
+    pub sources: Vec<SourceSpec>,
     #[serde(default)]
     pub end_action: EndAction,
 }
@@ -248,14 +245,16 @@ pub async fn run_sender(
     mut commands: mpsc::UnboundedReceiver<SenderCommand>,
 ) -> Result<()> {
     emit(Event::Preparing);
-    let path = options.path.clone();
-    let only = options.only.clone();
-    let source =
-        tokio::task::spawn_blocking(move || Source::with_selection(&path, only.as_deref()))
-            .await?
-            .with_context(|| format!("lecture de {} impossible", options.path.display()))?;
+    let specs = options.sources.clone();
+    let first = specs
+        .first()
+        .map(|s| s.path.display().to_string())
+        .unwrap_or_default();
+    let source = tokio::task::spawn_blocking(move || Source::from_specs(&specs))
+        .await?
+        .with_context(|| format!("lecture de {first} impossible"))?;
     if source.manifest().files.is_empty() {
-        bail!("aucun fichier à envoyer dans {}", options.path.display());
+        bail!("aucun fichier à envoyer dans {first}");
     }
     let source = Arc::new(source);
     let _awake = Awake::hold("Lugus Transfer : envoi en cours");

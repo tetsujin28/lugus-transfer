@@ -39,7 +39,7 @@ Your browser may also flag the download as unusual or dangerous: this is common 
 
 - **Direct transfer.** The files go from one computer to the other and are stored nowhere else. Both computers must be on and running Lugus Transfer at the same time.
 - **A link and a code.** The sender creates a link (`lugus://r/…`) and a short code such as `4821-lanterne-7`, to send through two different channels. The link is valid for 24 hours, with 3 attempts per code.
-- **Choose what you send, choose what you receive.** Drop a folder, one file or several files. Untick what should not go, then the recipient unticks what they do not need right now (originals, proxies, sidecar files, or file by file).
+- **Choose what you send, choose what you receive.** Drop folders or files, from one or several drives, one drop after another. Untick what should not go, then the recipient unticks what they do not need right now (originals, proxies, sidecar files, or file by file).
 - **Proxies first.** Proxies and sidecar files arrive before the originals, so the editor can start sooner.
 - **Verified on the recipient's disk.** Each file is read back from the destination disk with the system cache bypassed, and compared block by block, then as a whole, with the hash of the source (BLAKE3). A file only gets its final name once it is verified.
 - **Resumes exactly where it stopped.** After a network cut, a closed window or a computer gone to sleep, start the reception again: every block already written and checked is kept, and both screens show the same progress.
@@ -53,7 +53,7 @@ Your browser may also flag the download as unusual or dangerous: this is common 
 ## How to use it
 
 **To send**
-1. Drop a folder or files on the window, or use **Choose a folder** / **Choose files**.
+1. Drop folders or files on the window, or use **Choose a folder** / **Choose files**. Each drop is added to the previous one, so you can send footage from two drives or two folders at once.
 2. Untick what you do not want to send, then click **Create the link**.
 3. Send the **link** and the **code** to the recipient, through two different channels (email and text message, for example).
 4. Leave Lugus Transfer open until **DELIVERED AND VERIFIED**.

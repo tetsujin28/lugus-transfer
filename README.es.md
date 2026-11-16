@@ -39,7 +39,7 @@ Tu navegador también puede marcar la descarga como inusual o peligrosa: es habi
 
 - **Transferencia directa.** Los archivos van de un ordenador al otro y no se guardan en ningún otro sitio. Los dos ordenadores deben estar encendidos, con Lugus Transfer abierto, al mismo tiempo.
 - **Un enlace y un código.** El remitente crea un enlace (`lugus://r/…`) y un código corto como `4821-lanterne-7`, que se envían por dos canales distintos. El enlace es válido 24 horas, con 3 intentos por código.
-- **Elige lo que envías, elige lo que recibes.** Suelta una carpeta, un archivo o varios archivos. Desmarca lo que no debe salir, y después el destinatario desmarca lo que no necesita de momento (originales, proxies, archivos anexos, o archivo por archivo).
+- **Elige lo que envías, elige lo que recibes.** Suelta carpetas o archivos, de uno o varios discos, un depósito tras otro. Desmarca lo que no debe salir, y después el destinatario desmarca lo que no necesita de momento (originales, proxies, archivos anexos, o archivo por archivo).
 - **Primero los proxies.** Los proxies y los archivos anexos llegan antes que los originales, para que el montaje pueda empezar antes.
 - **Verificado en el disco del destinatario.** Cada archivo se relee desde el disco de destino evitando la caché del sistema, y se compara bloque a bloque, y entero, con el hash del origen (BLAKE3). Un archivo solo recibe su nombre definitivo cuando está verificado.
 - **Se reanuda justo donde se detuvo.** Tras un corte de red, una ventana cerrada o un ordenador en reposo, vuelve a lanzar la recepción: se conserva cada bloque ya escrito y comprobado, y las dos pantallas muestran el mismo avance.
@@ -53,7 +53,7 @@ Tu navegador también puede marcar la descarga como inusual o peligrosa: es habi
 ## Cómo se usa
 
 **Para enviar**
-1. Suelta una carpeta o archivos en la ventana, o usa **Elegir una carpeta** / **Elegir archivos**.
+1. Suelta carpetas o archivos en la ventana, o usa **Elegir una carpeta** / **Elegir archivos**. Cada depósito se suma al anterior: puedes enviar el material de dos discos o de dos carpetas a la vez.
 2. Desmarca lo que no quieras enviar y haz clic en **Crear el enlace**.
 3. Envía el **enlace** y el **código** al destinatario, por dos canales distintos (correo y SMS, por ejemplo).
 4. Deja Lugus Transfer abierto hasta **ENTREGADO Y VERIFICADO**.

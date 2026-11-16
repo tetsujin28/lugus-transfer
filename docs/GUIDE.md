@@ -3,7 +3,7 @@
 </p>
 
 <h1 align="center">Lugus Transfer user guide</h1>
-<p align="center"><b>Version 0.1.0 (beta) · Windows and macOS</b></p>
+<p align="center"><b>Version 0.2.0 (beta) · Windows and macOS</b></p>
 <p align="center">
   <b>English</b> · <a href="GUIDE.fr.md">Français</a> · <a href="GUIDE.es.md">Español</a>
 </p>
@@ -67,8 +67,8 @@ On first launch, Lugus Transfer shows a disclaimer (1). Read it, then click **I 
 <p align="center"><img src="guide/01_interface_en.png" width="860" alt="The Lugus Transfer interface"></p>
 
 1. **Send / Receive**: the two modes of the app. The same app is used on both sides.
-2. **Drop zone**: drop a folder, one file or several files here.
-3. **Choose a folder / Choose files**: the same thing with the system window. "Choose files" lets you pick several files at once.
+2. **Drop zone**: drop folders or files here. Each drop is added to what is already there.
+3. **Choose a folder / Choose files**: the same thing with the system window, and these also add to what is there. "Choose files" lets you pick several files at once.
 4. **After delivery**: do nothing, put the computer to sleep, or shut it down once the recipient has confirmed delivery.
 5. **Main button**: **Create the link** when sending, **Receive** when receiving, then **Stop** while a transfer is running.
 6. **FR / EN / ES**: switches the interface language instantly.
@@ -90,7 +90,8 @@ The line **The machine stays awake during the transfer** reminds you that Lugus 
 
 Drop a folder on the window, or click **Choose a folder**. You can also send:
 - **one file**: it will arrive on its own in the recipient's folder;
-- **several files**: drop them together, or select them with **Choose files**. They must come from the same folder.
+- **several files**: drop them together, or select them with **Choose files**;
+- **several places**: two drives, or two folders in different locations. Drop or choose the first, then the second: it is added, it does not replace. Each source has a ✕ to remove it, and **Remove all** starts again. If you add a folder that is already inside one you added, it is not sent twice.
 
 When you choose a folder or several files, their content is listed on the right, everything ticked:
 
@@ -178,7 +179,7 @@ Click **Receive** at the top left.
 
 1. **Link**: paste the link you were sent. *Valid link* confirms its form.
 2. **Code**: type the code. It is checked on your computer before anything is sent: a typo is caught right away and **never uses up an attempt**.
-3. **Destination**: click **Choose** and pick the folder where the footage will arrive. A folder arrives in a sub-folder with its name, and so do several files sent together (with the name of the folder they come from). A single file arrives directly in the destination.
+3. **Destination**: click **Choose** and pick the folder where the footage will arrive. A folder arrives in a sub-folder with its name, and so do several files sent together (with the name of the folder they come from). When the footage comes from several places, you get one folder `Rushes_<date>` with a sub-folder for each source, named after the folder or the drive (`_2` is added if two sources have the same name). A single file arrives directly in the destination.
 4. **Noctiluca mode**: to receive overnight (see section 6).
 5. **Receive**: starts the reception.
 

@@ -64,11 +64,96 @@ pub fn source_root(path: &Path) -> io::Result<PathBuf> {
 
 /// Chemin source d'une entrée du manifeste.
 pub fn source_path(root: &Path, entry: &FileEntry) -> PathBuf {
+    join_relative(root, &entry.path)
+}
+
+/// `relative` (séparateur `/`) placé sous `root`.
+pub fn join_relative(root: &Path, relative: &str) -> PathBuf {
     let mut path = root.to_path_buf();
-    for part in entry.path.split('/') {
+    for part in relative.split('/') {
         path.push(part);
     }
     path
+}
+
+/// Une source d'un envoi : le préfixe de ses chemins dans le manifeste (avec
+/// `/` final, vide s'il n'y a qu'une source) et le dossier où la lire.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SourcePart {
+    pub prefix: String,
+    pub root: PathBuf,
+}
+
+/// Combine les manifestes de plusieurs sources (disques, dossiers à des
+/// endroits différents) en un seul.
+///
+/// - une seule source : rien ne change, ses chemins restent tels quels ;
+/// - plusieurs : le destinataire reçoit un dossier `Rushes_<date>` qui contient
+///   un sous-dossier par source, nommé comme la source (nom du dossier ou du
+///   disque). Deux sources de même nom (sans tenir compte des majuscules)
+///   reçoivent `_2`, `_3`… Deux entrées venant du même dossier sont fusionnées,
+///   sans doublon.
+///
+/// Chaque élément est un manifeste et le dossier à partir duquel ses chemins
+/// se lisent (`source_root`).
+pub fn combine(sources: Vec<(Manifest, PathBuf)>) -> io::Result<(Manifest, Vec<SourcePart>)> {
+    if sources.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "aucune source à envoyer",
+        ));
+    }
+    if sources.len() == 1 {
+        let (manifest, root) = sources.into_iter().next().expect("une source");
+        return Ok((
+            manifest,
+            vec![SourcePart {
+                prefix: String::new(),
+                root,
+            }],
+        ));
+    }
+
+    // Une entrée par dossier source, dans l'ordre d'apparition.
+    let mut grouped: Vec<(PathBuf, Vec<FileEntry>)> = Vec::new();
+    for (manifest, root) in sources {
+        match grouped.iter_mut().find(|(known, _)| *known == root) {
+            Some((_, files)) => files.extend(manifest.files),
+            None => grouped.push((root, manifest.files)),
+        }
+    }
+
+    let mut taken: Vec<String> = Vec::new();
+    let mut parts = Vec::new();
+    let mut files = Vec::new();
+    for (root, group) in grouped {
+        let base = content_name(&root);
+        let mut name = base.clone();
+        let mut n = 2;
+        while taken.iter().any(|t| t.eq_ignore_ascii_case(&name)) {
+            name = format!("{base}_{n}");
+            n += 1;
+        }
+        taken.push(name.clone());
+        let prefix = format!("{name}/");
+        let mut group = group;
+        group.sort_by(|a, b| a.path.cmp(&b.path));
+        group.dedup_by(|a, b| a.path == b.path);
+        for mut file in group {
+            file.path = format!("{prefix}{}", file.path);
+            files.push(file);
+        }
+        parts.push(SourcePart { prefix, root });
+    }
+    files.sort_by(|a, b| a.path.cmp(&b.path));
+
+    Ok((
+        Manifest {
+            name: format!("Rushes_{}", chrono::Local::now().format("%Y-%m-%d")),
+            files,
+        },
+        parts,
+    ))
 }
 
 /// Liste canonique des hash BLAKE3 (`hash  chemin`, triée par chemin) et son
@@ -561,5 +646,108 @@ mod tests {
         assert_eq!(manifest.files.len(), 1);
         assert_eq!(manifest.files[0].size, 3);
         fs::remove_file(&path).unwrap();
+    }
+    fn fake(path: &str) -> FileEntry {
+        FileEntry {
+            kind: classify(path),
+            path: path.to_string(),
+            size: 10,
+            modified_unix: None,
+            root_hash: None,
+        }
+    }
+
+    fn manifest_of(name: &str, paths: &[&str]) -> Manifest {
+        Manifest {
+            name: name.to_string(),
+            files: paths.iter().map(|p| fake(p)).collect(),
+        }
+    }
+
+    #[test]
+    fn one_source_is_left_alone() {
+        let (manifest, parts) = combine(vec![(
+            manifest_of("J04", &["A001/a.mov"]),
+            PathBuf::from("/rushes/J04"),
+        )])
+        .unwrap();
+        assert_eq!(manifest.name, "J04");
+        assert_eq!(manifest.files[0].path, "A001/a.mov");
+        assert_eq!(parts[0].prefix, "");
+    }
+
+    #[test]
+    fn two_sources_get_one_folder_each() {
+        let (manifest, parts) = combine(vec![
+            (
+                manifest_of("DISQUE_A", &["A001/a.mov", "A001/b.mov"]),
+                PathBuf::from("/Volumes/DISQUE_A"),
+            ),
+            (
+                manifest_of("Proxys", &["p1.mp4"]),
+                PathBuf::from("/Users/dom/Proxys"),
+            ),
+        ])
+        .unwrap();
+        assert!(manifest.name.starts_with("Rushes_"));
+        let paths: Vec<&str> = manifest.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            [
+                "DISQUE_A/A001/a.mov",
+                "DISQUE_A/A001/b.mov",
+                "Proxys/p1.mp4"
+            ]
+        );
+        assert_eq!(parts[0].prefix, "DISQUE_A/");
+        assert_eq!(parts[1].root, PathBuf::from("/Users/dom/Proxys"));
+    }
+
+    #[test]
+    fn same_name_gets_a_suffix() {
+        let (manifest, parts) = combine(vec![
+            (
+                manifest_of("CARTE", &["a.mov"]),
+                PathBuf::from("/disque1/CARTE"),
+            ),
+            (
+                manifest_of("carte", &["b.mov"]),
+                PathBuf::from("/disque2/carte"),
+            ),
+        ])
+        .unwrap();
+        assert_eq!(parts[0].prefix, "CARTE/");
+        assert_eq!(parts[1].prefix, "carte_2/");
+        assert_eq!(manifest.files[1].path, "carte_2/b.mov");
+    }
+
+    #[test]
+    fn same_folder_is_merged_without_duplicates() {
+        let (manifest, parts) = combine(vec![
+            (
+                manifest_of("A001", &["a.mov", "b.mov"]),
+                PathBuf::from("/disque/A001"),
+            ),
+            (
+                manifest_of("A001", &["b.mov", "c.mov"]),
+                PathBuf::from("/disque/A001"),
+            ),
+            (
+                manifest_of("B002", &["d.mov"]),
+                PathBuf::from("/disque/B002"),
+            ),
+        ])
+        .unwrap();
+        assert_eq!(parts.len(), 2);
+        let paths: Vec<&str> = manifest.files.iter().map(|f| f.path.as_str()).collect();
+        assert_eq!(
+            paths,
+            ["A001/a.mov", "A001/b.mov", "A001/c.mov", "B002/d.mov"]
+        );
+    }
+
+    #[test]
+    fn no_source_is_an_error() {
+        assert!(combine(vec![]).is_err());
     }
 }

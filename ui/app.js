@@ -2,7 +2,7 @@
 // Fonctionne dans l'app Tauri (window.__TAURI__) ou en mode démo dans un navigateur.
 "use strict";
 
-let VERSION = "0.1.0"; // remplacé au démarrage par la version de l'application
+let VERSION = "0.2.0"; // remplacé au démarrage par la version de l'application
 const $ = (id) => document.getElementById(id);
 const store = {
   get(k, d) { try { const v = localStorage.getItem("lugus." + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
@@ -161,32 +161,47 @@ function demoBackend() {
     out.push({ path: `${LANG === "fr" ? "Rapport" : LANG === "es" ? "Informe" : "Report"}_${day()}.pdf`, size: 2.4e5, kind: "Sidecar" });
     return out.sort((a, b) => (a.path < b.path ? -1 : 1));
   })();
-  let chooseFn = null;
+  let chooseFn = null, folderCalls = 0;
+  // Deuxième endroit simulé : une autre carte, avec ses propres fichiers.
+  const demoExtra = [
+    { path: "B001/B001C001.braw", size: 3.1e10, kind: "Original" },
+    { path: "B001/B001C001.sidecar.xml", size: 4200, kind: "Sidecar" },
+  ];
+  const demoList = (path) => (path.includes("/CARTE_B") ? demoExtra : path.endsWith(".braw") ? [{ path: path.split("/").pop(), size: 4.2e9, kind: "Original" }] : demoEntries);
   return {
     demo: true,
-    pickFolder: async () => `/Volumes/RUSHES/${day()}`,
+    pickFolder: async () => (folderCalls++ === 0 ? `/Volumes/RUSHES/${day()}` : "/Volumes/CARTE_B/Rushes"),
     pickDest: async () => "/Volumes/MONTAGE/Rushes",
     pickFiles: async () => ["A001C001.braw", "A001C002.braw", "A001C001.sidecar.xml"].map((f) => `/Volumes/RUSHES/${day()}/A001/${f}`),
     scan: async (paths) => {
       const sum = (list) => list.reduce((a, e) => a + e.size, 0);
-      if (paths.length === 1 && paths[0].endsWith(".braw"))
-        return { path: paths[0], name: paths[0].split("/").pop(), files: 1, bytes: 4.2e9, folder: false, entries: [], only: null };
-      if (paths.length === 1)
-        return { path: paths[0], name: paths[0].split("/").pop(), files: demoEntries.length, bytes: sum(demoEntries), folder: true, entries: demoEntries, only: null };
-      const root = paths[0].split("/").slice(0, -1).join("/");
-      if (paths.some((p) => p.split("/").slice(0, -1).join("/") !== root)) throw "lugus:err_same_folder";
-      const names = paths.map((p) => p.split("/").pop());
-      const entries = demoEntries.filter((e) => e.path.startsWith("A001/") && names.includes(e.path.split("/").pop()))
-        .map((e) => ({ ...e, path: e.path.split("/").pop() }));
-      return { path: root, name: root.split("/").pop(), files: entries.length, bytes: sum(entries), folder: true, entries, only: entries.map((e) => e.path) };
+      const parent = (p) => p.split("/").slice(0, -1).join("/");
+      const base = (p) => p.split("/").pop();
+      const groups = [];
+      for (const p of paths) {
+        const g = groups.find((x) => x.root === parent(p));
+        g ? g.items.push(p) : groups.push({ root: parent(p), items: [p] });
+      }
+      return groups.map(({ root, items }) => {
+        if (items.length === 1) {
+          const p = items[0], list = demoList(p), file = p.endsWith(".braw");
+          return { path: p, root: file ? root : p, root_name: base(file ? root : p), name: base(p), files: list.length, bytes: sum(list), folder: !file, whole: !file, entries: list, only: null };
+        }
+        const names = items.map(base);
+        const entries = demoEntries.filter((e) => e.path.startsWith("A001/") && names.includes(e.path.split("/").pop()))
+          .map((e) => ({ ...e, path: e.path.split("/").pop() }));
+        return { path: root, root, root_name: base(root), name: base(root), files: entries.length, bytes: sum(entries), folder: true, whole: false, entries, only: entries.map((e) => e.path) };
+      });
     },
     checkCode: async (c) => { if (!/^\d{4}-[a-z]+-\d$/i.test(c.trim())) throw t("demo_code_shape"); return c.trim().toLowerCase(); },
     checkLink: async (l) => { if (!/^lugus:\/\/r\/[a-z0-9]{52}/.test(l.trim())) throw t("demo_link_shape"); },
     send: async (o) => {
       later(100, () => handler({ type: "preparing" }));
-      const files = o.only ? o.only.length : demoEntries.length;
-      const bytes = o.only ? demoEntries.filter((e) => o.only.includes(e.path) || o.only.includes(e.path.split("/").pop())).reduce((a, e) => a + e.size, 0) : demoEntries.reduce((a, e) => a + e.size, 0);
-      later(700, () => handler({ type: "ready", link, code: code(), name: o.path.split("/").pop(), files, bytes, relay: true }));
+      const chosen = o.sources.flatMap((sp) => demoList(sp.path).filter((e) => !sp.only || sp.only.includes(e.path)));
+      const files = chosen.length;
+      const bytes = chosen.reduce((a, e) => a + e.size, 0);
+      const name = o.sources.length > 1 ? `Rushes_${new Date().toISOString().slice(0, 10)}` : o.sources[0].path.split("/").pop();
+      later(700, () => handler({ type: "ready", link, code: code(), name, files, bytes, relay: true }));
       later(2600, () => handler({ type: "published", seconds: 1.9 }));
       later(4200, () => handler({ type: "incoming", path: "direct" }));
       later(4700, () => handler({ type: "wrong_code", remaining: 2 }));
@@ -237,7 +252,7 @@ const api = window.__TAURI__ ? tauriBackend() : demoBackend();
 const S = {
   mode: store.get("mode", "send"),
   running: false,
-  source: null,                       // { path, name, files, bytes }
+  sources: [],                        // [{ path, root, root_name, name, files, bytes, folder, whole, entries, only }]
   dest: store.get("dest", null),
   linkOk: false, codeOk: false,
   total: 0, startT: 0, samples: [],
@@ -322,48 +337,133 @@ function renderPub() {
 
 function renderDrop() {
   const d = $("drop");
-  if (!S.source) {
+  if (!S.sources.length) {
     d.classList.remove("has");
     d.innerHTML = `<div class="empty"><b>${esc(t("drop_title"))}</b>${esc(t("drop_sub"))}</div>`;
     return;
   }
   d.classList.add("has");
+  const all = S.sources.reduce((a, x) => a + x.entries.length, 0);
+  const allBytes = S.sources.reduce((a, x) => a + x.entries.reduce((b, e) => b + e.size, 0), 0);
   const partial = S.pick?.side === "send" && S.pick.on.size < S.pick.entries.length;
-  const files = partial ? `${S.pick.on.size} / ${S.source.files}` : S.source.files;
-  const bytes = partial ? S.pick.entries.filter((_, i) => S.pick.on.has(i)).reduce((a, e) => a + e.size, 0) : S.source.bytes;
-  d.innerHTML = `${S.running ? "" : `<button class="clear" id="clearSource" title="${esc(t("clear_source_title"))}">✕ ${esc(t("clear_source"))}</button>`}<div class="path">${esc(S.source.path)}</div>
-    <div class="stats"><span>${esc(t("files_word"))} <b>${files}</b></span><span>${esc(t("size_word"))} <b>${fmtBytes(bytes)}</b></span></div>`;
+  const files = partial ? `${S.pick.on.size} / ${all}` : all;
+  const bytes = partial ? S.pick.entries.filter((_, i) => S.pick.on.has(i)).reduce((a, e) => a + e.size, 0) : allBytes;
+  const multi = S.sources.length > 1;
+  const rows = S.sources.map((x, i) => `<div class="src"><div class="path">${esc(x.path)}</div>${!S.running && multi ? `<button class="rm" data-rm="${i}" title="${esc(t("remove_source_title"))}">✕</button>` : ""}</div>`).join("");
+  d.innerHTML = `${S.running ? "" : `<button class="clear" id="clearSource" title="${esc(t("clear_source_title"))}">✕ ${esc(t(multi ? "clear_all" : "clear_source"))}</button>`}${rows}
+    <div class="stats"><span>${esc(t("files_word"))} <b>${files}</b></span><span>${esc(t("size_word"))} <b>${fmtBytes(bytes)}</b></span></div>${multi ? `<div class="multi">${esc(t("multi_note"))}</div>` : ""}`;
 }
 
 // Vide ce qui a été choisi pour l'envoi et revient à l'état de départ.
 function clearSource() {
   if (S.running) return;
-  S.source = null; S.sendPick = null;
+  S.sources = []; S.sendPick = null;
   hint("srcHint", "");
   closePicker();
   resetRight();
   renderDrop(); renderGo();
 }
 
-// Un dossier, un fichier, ou plusieurs éléments d'un même dossier.
-async function useSource(paths) {
+// Nom de chaque source à l'arrivée : celui de son dossier ou de son disque, avec
+// _2, _3… si deux sources portent le même nom (comme le fait le moteur).
+function sourceNames() {
+  const taken = [], names = [];
+  for (const x of S.sources) {
+    let name = x.root_name, n = 2;
+    while (taken.includes(name.toLowerCase())) name = `${x.root_name}_${n++}`;
+    taken.push(name.toLowerCase()); names.push(name);
+  }
+  return names;
+}
+
+// Tous les fichiers à envoyer, toutes sources confondues. Avec plusieurs sources,
+// le chemin affiché commence par le nom de la source, comme chez le destinataire.
+function sendEntries() {
+  const names = sourceNames(), multi = S.sources.length > 1, out = [];
+  S.sources.forEach((x, si) => x.entries.forEach((e) => out.push({ ...e, rel: e.path, path: multi ? `${names[si]}/${e.path}` : e.path, src: si })));
+  return out;
+}
+
+const entryKey = (e) => `${S.sources[e.src].root}\u0000${e.rel}`;
+
+// Fichiers décochés dans l'écran de choix, pour les garder décochés après un ajout.
+function offKeys() {
+  const off = new Set();
+  if (S.pick?.side === "send") S.pick.entries.forEach((e, i) => { if (!S.pick.on.has(i)) off.add(entryKey(e)); });
+  return off;
+}
+
+// Reconstruit l'écran de choix de l'envoi après un ajout ou un retrait.
+function syncSendPicker(off) {
+  const entries = sendEntries();
+  if (entries.length <= 1) { closePicker(); return; }
+  const open = S.sources.length > 1 ? new Set(sourceNames().map((n) => n + "/")) : new Set();
+  S.pick = { side: "send", entries, on: new Set(entries.map((_, i) => i).filter((i) => !off.has(entryKey(entries[i])))), open };
+  $("idle").classList.add("hidden");
+  $("picker").classList.remove("hidden");
+  renderPicker();
+}
+
+// Deux ajouts du même dossier ne font qu'une source.
+function mergeSource(a, b) {
+  const seen = new Map();
+  [...a.entries, ...b.entries].forEach((e) => seen.set(e.path, e));
+  const entries = [...seen.values()].sort((x, y) => (x.path < y.path ? -1 : 1));
+  const wanted = (x) => x.only ?? x.entries.map((e) => e.path);
+  const whole = a.whole || b.whole;
+  const only = whole ? null : [...new Set([...wanted(a), ...wanted(b)])].sort();
+  return { ...a, path: a.root, folder: true, whole, only, entries, files: entries.length, bytes: entries.reduce((n, e) => n + e.size, 0) };
+}
+
+// `child` est-il dans le dossier `parent` ?
+function inside(child, parent) {
+  if (child === parent) return false;
+  return /[\\/]$/.test(parent) ? child.startsWith(parent) : child.startsWith(parent + "/") || child.startsWith(parent + "\\");
+}
+
+// Ajoute les sources trouvées. Un dossier déjà envoyé en entier contient déjà ce
+// qu'on y ajoute : on ne l'envoie pas deux fois. Renvoie `true` si quelque chose
+// a été ignoré pour cette raison.
+function addSummaries(found) {
+  let skipped = false;
+  for (const n of found) {
+    if (S.sources.some((x) => x.whole && inside(n.root, x.root))) { skipped = true; continue; }
+    if (n.whole) S.sources = S.sources.filter((x) => !inside(x.root, n.root));
+    const k = S.sources.findIndex((x) => x.root === n.root);
+    if (k < 0) S.sources.push(n); else S.sources[k] = mergeSource(S.sources[k], n);
+  }
+  return skipped;
+}
+
+// Ce qui est glissé ou choisi s'ajoute à ce qui est déjà là : dossiers, fichiers,
+// d'un ou de plusieurs disques.
+async function addSources(paths) {
   if (!paths || S.running) return;
   if (!Array.isArray(paths)) paths = [paths];
   if (!paths.length) return;
+  let found;
   try {
-    S.source = await api.scan(paths);
-    store.set("lastSource", S.source.path);
+    found = await api.scan(paths);
   } catch (e) {
-    S.source = null;
     const msg = String(e);
     const text = msg.startsWith("lugus:") ? t(msg.slice(6)) : engineError(msg).known ? engineError(msg).text : t("read_fail") + " : " + msg;
     hint("srcHint", text, "bad");
-    closePicker(); renderDrop(); renderGo();
     return;
   }
-  hint("srcHint", "");
-  if (S.source?.folder && S.source.entries?.length > 1) openPicker("send", S.source.entries);
-  else closePicker();
+  const off = offKeys();
+  const skipped = addSummaries(found);
+  store.set("lastSource", found[found.length - 1].path);
+  hint("srcHint", skipped ? t("already_included") : "");
+  syncSendPicker(off);
+  renderDrop(); renderGo();
+}
+
+function removeSource(i) {
+  if (S.running) return;
+  const off = offKeys();
+  S.sources.splice(i, 1);
+  if (!S.sources.length) return clearSource();
+  syncSendPicker(off);
   renderDrop(); renderGo();
 }
 
@@ -399,13 +499,13 @@ function renderGo() {
   const go = $("go");
   if (S.mode === "send") {
     go.textContent = t("create_link");
-    go.disabled = S.running || !S.source || (S.pick?.side === "send" && S.pick.on.size === 0);
+    go.disabled = S.running || !S.sources.length || (S.pick?.side === "send" && S.pick.on.size === 0);
   } else {
     go.textContent = $("nightOn")?.checked ? t("receive_night") : t("receive_now");
     go.disabled = S.running || !S.linkOk || !S.codeOk || !S.dest;
   }
   go.classList.toggle("hidden", S.running);
-  if (S.mode === "send" && S.source) $("clearSource")?.classList.toggle("hidden", S.running);
+  if (S.mode === "send" && S.sources.length) $("clearSource")?.classList.toggle("hidden", S.running);
   $("stop").classList.toggle("hidden", !S.running);
   $("modeSend").disabled = S.running; $("modeRecv").disabled = S.running;
 }
@@ -428,11 +528,19 @@ function closePicker() {
   if (!S.running && $("status").classList.contains("hidden")) $("idle").classList.remove("hidden");
 }
 
-// Chemins choisis à l'envoi, ou null si tout le dossier part.
-function sendSelection() {
-  if (S.pick?.side !== "send") return S.source?.only ?? null;
-  if (S.pick.on.size === S.pick.entries.length) return S.source?.only ?? null;
-  return S.pick.entries.filter((_, i) => S.pick.on.has(i)).map((e) => e.path);
+// Sources à envoyer, avec pour chacune les chemins choisis (null : tout part).
+function sendSpecs() {
+  const sending = S.pick?.side === "send";
+  const entries = sending ? S.pick.entries : sendEntries();
+  const specs = [];
+  S.sources.forEach((x, si) => {
+    const mine = entries.map((e, i) => ({ e, i })).filter(({ e }) => e.src === si);
+    const chosen = mine.filter(({ i }) => !sending || S.pick.on.has(i)).map(({ e }) => e);
+    if (!chosen.length) return;
+    if (chosen.length === mine.length) specs.push({ path: x.path, only: x.only ?? null });
+    else specs.push({ path: x.root, only: chosen.map((e) => e.rel) });
+  });
+  return specs;
 }
 
 // Arbre : { dirs: Map(nom -> nœud), files: [indice], all: [indices du sous-arbre] }
@@ -832,7 +940,7 @@ function onEvent(e) {
 
 async function go() {
   if (S.running) return;
-  const only = S.mode === "send" ? sendSelection() : null;
+  const sources = S.mode === "send" ? sendSpecs() : null;
   resetRight();
   const night = S.mode === "recv" && $("nightOn").checked;
   S.night = night;
@@ -843,7 +951,7 @@ async function go() {
     if (S.mode === "send") {
       step("prepare"); phase("ph_preparing");
       setChip("run", "chip_preparing");
-      await api.send({ path: S.source.path, only, end_action: $("sendAfter").value });
+      await api.send({ sources, end_action: $("sendAfter").value });
     } else {
       step(night ? "night" : "search");
       phase(night ? "ph_night_start" : "ph_searching", null, night ? null : { key: "ph_searching_sub" });
@@ -927,11 +1035,13 @@ function init() {
 
   $("drop").onclick = async (ev) => {
     if (ev.target.closest("#clearSource")) { ev.stopPropagation(); return clearSource(); }
-    useSource(await api.pickFolder(store.get("lastSource", null)));
+    const rm = ev.target.closest("[data-rm]");
+    if (rm) { ev.stopPropagation(); return removeSource(Number(rm.dataset.rm)); }
+    addSources(await api.pickFolder(store.get("lastSource", null)));
   };
-  $("pickFolder").onclick = async () => useSource(await api.pickFolder(store.get("lastSource", null)));
-  $("pickFiles").onclick = async () => useSource(await api.pickFiles());
-  api.onDrop((paths) => { if (S.mode !== "send") setMode("send"); useSource(paths); });
+  $("pickFolder").onclick = async () => addSources(await api.pickFolder(store.get("lastSource", null)));
+  $("pickFiles").onclick = async () => addSources(await api.pickFiles());
+  api.onDrop((paths) => { if (S.mode !== "send") setMode("send"); addSources(paths); });
 
   $("pickDest").onclick = async () => {
     const p = await api.pickDest(S.dest);

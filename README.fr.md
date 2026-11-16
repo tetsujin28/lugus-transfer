@@ -39,7 +39,7 @@ Votre navigateur peut aussi signaler le téléchargement comme inhabituel ou dan
 
 - **Transfert direct.** Les fichiers vont d'un ordinateur à l'autre et ne sont stockés nulle part ailleurs. Les deux ordinateurs doivent être allumés, avec Lugus Transfer ouvert, en même temps.
 - **Un lien et un code.** L'expéditeur crée un lien (`lugus://r/…`) et un code court comme `4821-lanterne-7`, à transmettre par deux canaux différents. Le lien est valable 24 heures, avec 3 essais par code.
-- **Choisir ce qu'on envoie, choisir ce qu'on reçoit.** Déposez un dossier, un fichier ou plusieurs fichiers. Décochez ce qui ne doit pas partir, puis le destinataire décoche ce dont il n'a pas besoin tout de suite (originaux, proxys, fichiers annexes, ou fichier par fichier).
+- **Choisir ce qu'on envoie, choisir ce qu'on reçoit.** Déposez des dossiers ou des fichiers, d'un ou de plusieurs disques, un dépôt après l'autre. Décochez ce qui ne doit pas partir, puis le destinataire décoche ce dont il n'a pas besoin tout de suite (originaux, proxys, fichiers annexes, ou fichier par fichier).
 - **Les proxys d'abord.** Les proxys et les fichiers annexes arrivent avant les originaux : le montage peut commencer plus tôt.
 - **Vérifié sur le disque du destinataire.** Chaque fichier est relu sur le disque de destination en contournant le cache du système, puis comparé bloc par bloc, et en entier, au hash de la source (BLAKE3). Un fichier ne prend son nom définitif qu'une fois vérifié.
 - **Reprend exactement là où il s'est arrêté.** Après une coupure du réseau, une fenêtre fermée ou un ordinateur mis en veille, relancez la réception : chaque bloc déjà écrit et contrôlé est conservé, et les deux écrans affichent le même avancement.
@@ -53,7 +53,7 @@ Votre navigateur peut aussi signaler le téléchargement comme inhabituel ou dan
 ## Comment s'en servir
 
 **Pour envoyer**
-1. Déposez un dossier ou des fichiers sur la fenêtre, ou utilisez **Choisir un dossier** / **Choisir des fichiers**.
+1. Déposez des dossiers ou des fichiers sur la fenêtre, ou utilisez **Choisir un dossier** / **Choisir des fichiers**. Chaque dépôt s'ajoute au précédent : vous pouvez envoyer les rushes de deux disques ou de deux dossiers en même temps.
 2. Décochez ce que vous ne voulez pas envoyer, puis cliquez sur **Créer le lien**.
 3. Transmettez le **lien** et le **code** au destinataire, par deux canaux différents (mail et SMS, par exemple).
 4. Laissez Lugus Transfer ouvert jusqu'à **LIVRÉ ET VÉRIFIÉ**.
