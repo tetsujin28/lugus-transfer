@@ -1,7 +1,7 @@
 # Lugus Transfer : où j'en suis et ce qui vient
 
 Mes notes de travail sur Lugus Transfer : l'état du projet, mes choix et la suite.
-Dernière mise à jour : 22 novembre 2026 (badge de version et réglages).
+Dernière mise à jour : 22 novembre 2026 (v0.3.0 : badge de version et réglages).
 
 ## Le projet
 
@@ -15,7 +15,7 @@ C'est l'application sœur de **Bandua** (déchargement), de **Bandua MHL Compani
 
 - Dépôt : https://github.com/tetsujin28/lugus-transfer (public)
 - Site : https://tetsujin28.github.io
-- Version : v0.2.0 (pré-version bêta), publiée le 16 novembre 2026
+- Version : v0.3.0 (pré-version bêta), publiée le 22 novembre 2026 (v0.2.0 le 16 novembre)
 
 ## Feuille de route, par ordre de priorité
 
@@ -42,10 +42,10 @@ C'est l'application sœur de **Bandua** (déchargement), de **Bandua MHL Compani
 - ✅ Un dossier déjà inclus dans un dossier ajouté n'est pas envoyé deux fois
 - ✅ La ligne de commande accepte plusieurs chemins : `lugus send <chemin> <chemin>`
 
-### 1 ter. Version et réglages ✅ fait (à publier)
+### 1 ter. Version 0.3 : version et réglages ✅ fait
 - ✅ Numéro de version en haut à droite ; au lancement, une seule requête à GitHub (pré-versions comprises) ; « vX.Y.Z disponible » et clic vers la page des Releases ; silence hors ligne
 - ✅ Fenêtre de réglages (roue dentée) avec « Vérifier les nouvelles versions », désactivable
-- Même fonction à reporter dans Bandua, Bandua MHL Companion et Ataecina
+- ✅ Même fonction dans Bandua, Bandua MHL Companion et Ataecina
 
 ### 2. Tests en conditions réelles ✅ premiers tests faits
 - Transferts entre mon PC et mon Mac, à distance, sur des réseaux différents (fibre, 4G, réseau d'hôtel ou de bureau très fermé) pour voir quand le relais prend le relais

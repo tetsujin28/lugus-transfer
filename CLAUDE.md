@@ -2,7 +2,7 @@
 
 Application gratuite de Domingo Olmo Martin (Dom), directeur de la photographie : transfert de rushes directement d'une machine à l'autre, sans serveur à maintenir, avec un lien et un code. Chaque fichier est relu sur le disque de destination, sans le cache du système, et comparé à la source ; un MHL 1.1 est écrit à l'arrivée.
 
-Windows et macOS (binaire universel). Le code doit rester compatible Linux. Licence MIT. Version : v0.2.0 (bêta). App sœur de [Bandua](https://github.com/tetsujin28/bandua) (déchargement) et d'[Ataecina](https://github.com/tetsujin28/ataecina) (récupération).
+Windows et macOS (binaire universel). Le code doit rester compatible Linux. Licence MIT. Version : v0.3.0 (bêta). App sœur de [Bandua](https://github.com/tetsujin28/bandua) (déchargement) et d'[Ataecina](https://github.com/tetsujin28/ataecina) (récupération).
 
 **Lire `docs/ROADMAP.md`** avant tout travail de fond : état du projet, priorités, choix et pistes écartées.
 

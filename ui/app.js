@@ -2,7 +2,7 @@
 // Fonctionne dans l'app Tauri (window.__TAURI__) ou en mode démo dans un navigateur.
 "use strict";
 
-let VERSION = "0.2.0"; // remplacé au démarrage par la version de l'application
+let VERSION = "0.3.0"; // remplacé au démarrage par la version de l'application
 const $ = (id) => document.getElementById(id);
 const store = {
   get(k, d) { try { const v = localStorage.getItem("lugus." + k); return v == null ? d : JSON.parse(v); } catch { return d; } },
