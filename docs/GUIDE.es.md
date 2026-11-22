@@ -71,8 +71,7 @@ En el primer arranque, Lugus Transfer muestra un aviso de exención de responsab
 3. **Elegir una carpeta / Elegir archivos**: lo mismo con la ventana del sistema, y también se suma a lo que ya está. «Elegir archivos» permite seleccionar varios a la vez.
 4. **Tras la entrega**: no hacer nada, suspender el ordenador o apagarlo cuando el destinatario haya confirmado la entrega.
 5. **Botón principal**: **Crear el enlace** para enviar, **Recibir** para recibir, y después **Detener** durante una transferencia.
-6. **FR / EN / ES**: cambia al instante el idioma de la interfaz.
-7. **Acerca de** (el botón *i*): versión, licencia y aviso.
+6. **Arriba a la derecha**: el número de versión, que también avisa cuando hay una nueva (ver más abajo), **FR / EN / ES** para cambiar al instante el idioma, los **Ajustes** (la rueda dentada) y **Acerca de** (el botón *i*): licencia y aviso.
 
 Durante una transferencia, la parte derecha muestra:
 - una fila de **pasos numerados**, con el paso actual resaltado;
@@ -83,6 +82,16 @@ Durante una transferencia, la parte derecha muestra:
 Arriba, la etiqueta junto al nombre de la aplicación resume el estado: *Listo*, *Preparando*, *Publicando*, *En espera*, *Enviando*, *Buscando*, *Elección*, *Recibiendo*, *Noctiluca*, *Verificado*, *Error*, *Detenido*.
 
 La línea **El equipo permanece despierto durante la transferencia** recuerda que Lugus Transfer impide que el ordenador entre en reposo solo mientras trabaja.
+
+### Versión y ajustes
+
+Al iniciar, Lugus Transfer pregunta una vez a GitHub si existe una versión más reciente (las versiones beta cuentan). Si es así, el número de versión de arriba a la derecha pasa a **vX.Y.Z disponible**, en azul: un clic abre la página de descarga. Nada se instala solo; descargas la nueva versión cuando lo decidas, mejor entre dos transferencias. Sin conexión, no se muestra nada y la aplicación funciona con normalidad.
+
+<p align="center"><img src="guide/15_update_es.png" width="520" alt="Hay una nueva versión disponible"></p>
+
+La rueda dentada abre los **Ajustes**. La casilla **Buscar nuevas versiones** (1) está marcada por defecto; desmárcala para que la aplicación no contacte nunca con GitHub. No se envía ningún otro dato durante esta comprobación.
+
+<p align="center"><img src="guide/16_settings_es.png" width="620" alt="Los ajustes"></p>
 
 ## 4. Enviar material, paso a paso
 
@@ -311,7 +320,7 @@ Sí. No se guarda nada entre los dos: los archivos pasan directamente de uno a o
 Un enlace sirve para una entrega. Para enviar el mismo material a otra persona, crea un nuevo enlace.
 
 **¿Qué pasa por Internet?**
-Para que lo encuentren, el remitente publica sus direcciones de red, firmadas con una clave de un solo uso, en la DHT pública de BitTorrent. Los archivos, los nombres de carpetas y el código nunca se publican: solo viajan cifrados entre los dos ordenadores.
+Para que lo encuentren, el remitente publica sus direcciones de red, firmadas con una clave de un solo uso, en la DHT pública de BitTorrent. Los archivos, los nombres de carpetas y el código nunca se publican: solo viajan cifrados entre los dos ordenadores. Fuera de las transferencias, la aplicación solo pregunta a GitHub, al iniciar, si hay una nueva versión; puedes desactivarlo en los Ajustes.
 
 **¿El programa del montador puede leer el MHL?**
 Sí, es MHL 1.1 en xxHash64, el estándar que leen Silverstack, ShotPut Pro, Hedge y Bandua MHL Companion.

@@ -35,6 +35,8 @@ Both computers need Lugus Transfer. The sender and the recipient do not need the
 
 Your browser may also flag the download as unusual or dangerous: this is common for new, unsigned apps. Keep the file from the downloads panel, and if in doubt, check it on [VirusTotal](https://www.virustotal.com). If your system asks whether Lugus Transfer may use the network, allow it: that is how the two computers reach each other.
 
+**New versions.** At startup, the app asks GitHub once whether a newer version exists and, if so, shows it at the top right; one click opens the download page. Nothing installs itself, and nothing else is sent. You can turn this check off in the Settings (the gear).
+
 ## What it does
 
 - **Direct transfer.** The files go from one computer to the other and are stored nowhere else. Both computers must be on and running Lugus Transfer at the same time.

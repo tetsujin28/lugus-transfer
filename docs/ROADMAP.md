@@ -1,7 +1,7 @@
 # Lugus Transfer : où j'en suis et ce qui vient
 
 Mes notes de travail sur Lugus Transfer : l'état du projet, mes choix et la suite.
-Dernière mise à jour : 16 novembre 2026 (v0.2.0 en préparation).
+Dernière mise à jour : 22 novembre 2026 (badge de version et réglages).
 
 ## Le projet
 
@@ -15,7 +15,7 @@ C'est l'application sœur de **Bandua** (déchargement), de **Bandua MHL Compani
 
 - Dépôt : https://github.com/tetsujin28/lugus-transfer (public)
 - Site : https://tetsujin28.github.io
-- Version : v0.1.0 publiée (pré-version bêta), v0.2.0 en préparation
+- Version : v0.2.0 (pré-version bêta), publiée le 16 novembre 2026
 
 ## Feuille de route, par ordre de priorité
 
@@ -42,17 +42,26 @@ C'est l'application sœur de **Bandua** (déchargement), de **Bandua MHL Compani
 - ✅ Un dossier déjà inclus dans un dossier ajouté n'est pas envoyé deux fois
 - ✅ La ligne de commande accepte plusieurs chemins : `lugus send <chemin> <chemin>`
 
-### 2. Tests en conditions réelles
+### 1 ter. Version et réglages ✅ fait (à publier)
+- ✅ Numéro de version en haut à droite ; au lancement, une seule requête à GitHub (pré-versions comprises) ; « vX.Y.Z disponible » et clic vers la page des Releases ; silence hors ligne
+- ✅ Fenêtre de réglages (roue dentée) avec « Vérifier les nouvelles versions », désactivable
+- Même fonction à reporter dans Bandua, Bandua MHL Companion et Ataecina
+
+### 2. Tests en conditions réelles ✅ premiers tests faits
 - Transferts entre mon PC et mon Mac, à distance, sur des réseaux différents (fibre, 4G, réseau d'hôtel ou de bureau très fermé) pour voir quand le relais prend le relais
 - Provoquer les pannes : couper le réseau, mettre en veille, débrancher le disque de destination, fermer la fenêtre, relancer très vite
 - Gros volumes : une journée de tournage complète, plusieurs centaines de Go, la nuit en mode Noctiluca
 - Faire tester une bêta à quelques collègues (monteurs, DIT)
 
-### 3. Ensuite, si le besoin se confirme
+### 3. Prochaines étapes
 - Codes d'erreur dans le moteur, plutôt que la reconnaissance des messages français par l'interface
-- Envoyer le même contenu à plusieurs destinataires sans recréer de lien
-- Une boîte aux lettres facultative (sur un serveur à soi) pour déposer les rushes quand les deux machines ne peuvent pas être allumées en même temps
+- Limite de débit réglable (dans les Réglages), pour ne pas saturer le réseau d'un plateau ou d'un bureau
+- Temps restant plus lisible : lissé, estimation de la vérification après 100 %, heure d'arrivée prévue
+
+### 4. Mis de côté
 - Signature des applications (Windows et macOS), pour supprimer l'avertissement au premier lancement
+- Une boîte aux lettres facultative (sur un serveur à soi) pour déposer les rushes quand les deux machines ne peuvent pas être allumées en même temps
+- Historique des envois et des réceptions
 - Remettre Linux le jour où je pourrai le tester
 
 ## Mes choix
@@ -62,13 +71,15 @@ C'est l'application sœur de **Bandua** (déchargement), de **Bandua MHL Compani
 - **La vérification se fait sur le disque, pas en mémoire.** Même relecture sans cache que Bandua : une correction faite dans `rawio.rs` est à reporter dans Bandua, et inversement.
 - **La liste de mots ne change jamais** : la position du mot entre dans le chiffre de contrôle du code.
 - **Deux canaux pour le lien et le code**, rappelés dans l'interface.
-- **Un lien sert à une livraison.**
+- **Un lien sert à une livraison**, d'une machine à une seule autre.
 
 ## Pistes écartées
 
 - **QR code du lien** : retiré, le lien se copie et s'envoie, le QR code n'apportait rien.
 - **Stockage temporaire sur un serveur** façon service de transfert : contraire à l'idée de départ.
 - **Contre-vérification par l'expéditeur** de la liste des empreintes de l'accusé : la comparaison est déjà faite par le destinataire avec les empreintes de l'expéditeur. À rouvrir si besoin.
+- **Plusieurs destinataires pour un même lien, ou entraide entre destinataires** façon BitTorrent : écarté, Lugus reste strictement de machine à machine, pour la sécurité.
+- **Mise à jour automatique en un clic** : demande une clé de signature propre à l'updater (à ne jamais perdre), des fichiers en plus dans la compilation, et ne marche pas pour la version portable. Le badge qui ouvre la page de téléchargement suffit.
 - **Phrase sur le capot des portables** dans l'interface : jugée incompréhensible, l'explication est dans le mode d'emploi.
 
 ## Aide-mémoire

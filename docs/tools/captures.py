@@ -20,7 +20,8 @@ CODE = "4821-lanterne-7"
 
 SEL = {
     "modes": ".modes", "drop": "#drop", "picks": ".picks", "after": "#sendForm > div:last-child",
-    "go": "#go", "stop": "#stop", "lang": "#lang", "about": "#about", "chip": "#chip", "lid": "#lidWarn",
+    "go": "#go", "stop": "#stop", "lang": "#lang", "about": "#about", "verBadge": "#verBadge", "settings": "#settings",
+    "optUpdate": "#modalBox .opt", "chip": "#chip", "lid": "#lidWarn",
     "clear": "#clearSource", "status": "#status", "steps": "#steps", "phase": "#phase",
     "picker": "#picker", "tools": "#pickTools", "tree": "#tree", "sum": "#pickSum", "pickOk": "#pickOk",
     "share": "#share", "shareLink": "#shareLink", "pub": "#pub", "shareCode": "#shareCode",
@@ -44,9 +45,19 @@ async def shot(page, name):
     json.dump(boxes, open(OUT / f"{name}.json", "w"))
     print("  ", name)
 
-async def fresh(browser, lang, accepted=True):
+async def fresh(browser, lang, accepted=True, newer=None):
     ctx = await browser.new_context(viewport={"width": 1280, "height": 820}, device_scale_factor=SCALE, locale=lang)
     page = await ctx.new_page()
+    # Recherche de nouvelle version : jamais de vraie requête. Sans `newer`, on
+    # fait comme si l'ordinateur était hors ligne (le badge montre la version).
+    async def releases(route):
+        if newer:
+            await route.fulfill(status=200, content_type="application/json",
+                                headers={"access-control-allow-origin": "*"},
+                                body=json.dumps([{"tag_name": "v" + newer, "draft": False}]))
+        else:
+            await route.abort()
+    await page.route("https://api.github.com/**", releases)
     await page.clock.install(time="2026-11-15T14:32:00")
     init = "window.LUGUS_DEMO_RATE=110e6;"  # 110 Mo/s, une fibre à 1 Gbit/s
     init += f"window.LUGUS_DEMO_CODE='{CODE}';"
@@ -126,6 +137,14 @@ async def main(lang):
         await until(page, "!document.querySelector('#banner').classList.contains('hidden')")
         await run(page, 300)
         await shot(page, f"recv_done_{lang}")
+        await page.context.close()
+
+        # --- Version et réglages
+        page = await fresh(b, lang, newer="0.3.0")
+        await run(page, 500)
+        await shot(page, f"update_{lang}")
+        await page.click("#settings"); await run(page, 300)
+        await shot(page, f"settings_{lang}")
         await page.context.close()
 
         # --- Mode Noctiluca

@@ -74,11 +74,12 @@ def readme(name, src, lang):
 
 share = lambda R: union([R["shareLink"], R["copyRow"]])
 code = lambda R: union([R["shareCode"], R["newCode"]])
+top = lambda R: union([R["verBadge"], R["lang"], R["settings"], R["about"]])
 bars = lambda R: union([R["pct"], R["bar"]])
 
 for L in ["fr", "en", "es"]:
     make("00_welcome", "welcome", L, [("warnbox", 1), ("modalOk", 2, 8, "left")], dimbg=False)
-    make("01_interface", "send_empty", L, [("modes", 1), ("drop", 2), ("picks", 3), ("after", 4), ("go", 5, 8, "left"), ("lang", 6), ("about", 7)])
+    make("01_interface", "send_empty", L, [("modes", 1), ("drop", 2), ("picks", 3), ("after", 4), ("go", 5, 8, "left"), (top, 6, 30, "left")])
     make("02_choose_send", "send_choose", L, [("tools", 1), ("tree", 2), ("sum", 3), ("drop", 4)])
     make("03_publishing", "send_publishing", L, [("steps", 1), ("phase", 2), ("pub", 3)], crop=["status", "share"], margin=30)
     make("04_link", "send_link", L, [("pub", 1), (share, 2), (code, 3), ("tip", 4)], crop=["share"], margin=30)
@@ -92,6 +93,8 @@ for L in ["fr", "en", "es"]:
     make("12_receive_mhl", "recv_mhl", L, [("steps", 1), ("phase", 2)], crop=["status"], margin=30)
     make("13_received", "recv_done", L, [("banner", 1), ("bannerBtns", 2), ("files", 3)])
     make("14_noctiluca", "recv_night", L, [("night", 1), ("steps", 2), ("phase", 3)])
+    make("15_update", "update", L, [("verBadge", None, 6)], crop=["verBadge", "about"], margin=24, maxw=900)
+    make("16_settings", "settings", L, [("optUpdate", 1, 8)], crop=["modal"], margin=24)
     readme("link", "send_link", L)
     readme("choose", "recv_choose", L)
     readme("received", "recv_done", L)
