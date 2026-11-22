@@ -35,6 +35,8 @@ Les deux ordinateurs ont besoin de Lugus Transfer. L'expéditeur et le destinata
 
 Votre navigateur peut aussi signaler le téléchargement comme inhabituel ou dangereux : c'est courant pour une application récente et non signée. Gardez le fichier depuis le panneau des téléchargements et, en cas de doute, faites-le analyser sur [VirusTotal](https://www.virustotal.com). Si votre système demande si Lugus Transfer peut utiliser le réseau, autorisez-le : c'est ainsi que les deux ordinateurs se joignent.
 
+**Nouvelles versions.** Au lancement, l'application demande une fois à GitHub si une version plus récente existe et, si c'est le cas, l'indique en haut à droite ; un clic ouvre la page de téléchargement. Rien ne s'installe tout seul et aucune autre donnée n'est envoyée. Vous pouvez désactiver cette vérification dans les Réglages (la roue dentée).
+
 ## Ce qu'il fait
 
 - **Transfert direct.** Les fichiers vont d'un ordinateur à l'autre et ne sont stockés nulle part ailleurs. Les deux ordinateurs doivent être allumés, avec Lugus Transfer ouvert, en même temps.

@@ -45,7 +45,7 @@ function applyLang() {
   $("vLabel").textContent = t(S.mode === "send" ? "verified_remote" : "verified_local");
   S.modalFn?.();
 }
-function setLang(l) { LANG = l; store.set("lang", l); applyLang(); }
+function setLang(l) { LANG = l; store.set("lang", l); applyLang(); renderVersion(); }
 
 // ------------------------------------------------------------------ Erreurs du moteur
 // Le moteur écrit ses erreurs en français. Les cas connus sont reconnus ici et
@@ -105,6 +105,7 @@ function tauriBackend() {
     cancel: () => invoke("cancel"),
     open: (path) => invoke("open_path", { path }),
     reveal: (path) => invoke("reveal_path", { path }),
+    openReleases: (url) => invoke("open_release_page", { url }),
     onEvent: (cb) => listen("lugus", (e) => cb(e.payload)),
     onDrop: (cb) => {
       const wv = window.__TAURI__.webview?.getCurrentWebview?.();
@@ -240,6 +241,7 @@ function demoBackend() {
     cancel: async () => stopAll(),
     open: async () => log(t("demo_open"), "dim"),
     reveal: async () => log(t("demo_reveal"), "dim"),
+    openReleases: async () => log(t("demo_open"), "dim"),
     onEvent: (cb) => (handler = cb),
     onDrop: () => {},
   };
@@ -1031,14 +1033,76 @@ function aboutBox(welcome) {
   };
 }
 
+// ------------------------------------------------------------------ Versions
+
+const RELEASES_API = "https://api.github.com/repos/tetsujin28/lugus-transfer/releases?per_page=15";
+const RELEASES_PAGE = "https://github.com/tetsujin28/lugus-transfer/releases";
+
+// "v0.3.0" ou "0.3.0-beta" -> [0, 3, 0] ; null si le texte n'est pas un numéro.
+function parseVersion(text) {
+  const m = /^v?(\d+)\.(\d+)\.(\d+)/.exec(String(text || "").trim());
+  return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
+}
+// > 0 si a est plus récente que b, < 0 si plus ancienne, 0 si égales.
+function compareVersions(a, b) {
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] - b[i];
+  return 0;
+}
+
+// Interroge GitHub une seule fois. Les pré-versions comptent (la bêta n'en a que),
+// les brouillons non. En cas d'échec (hors ligne, limite GitHub), on ne dit rien.
+async function checkUpdate() {
+  if (!store.get("updateCheck", true)) { S.latest = null; return renderVersion(); }
+  try {
+    const res = await fetch(RELEASES_API, { headers: { Accept: "application/vnd.github+json" } });
+    if (!res.ok) return;
+    let best = null;
+    for (const r of await res.json()) {
+      if (r.draft) continue;
+      const v = parseVersion(r.tag_name);
+      if (v && (!best || compareVersions(v, best) > 0)) best = v;
+    }
+    const mine = parseVersion(VERSION);
+    S.latest = best && mine && compareVersions(best, mine) > 0 ? best.join(".") : null;
+  } catch { S.latest = null; }
+  renderVersion();
+}
+
+function renderVersion() {
+  const b = $("verBadge");
+  const news = !!S.latest;
+  b.textContent = news ? t("update_badge", { v: S.latest }) : "v" + VERSION;
+  b.title = news ? t("update_title") : t("version_title");
+  b.classList.toggle("new", news);
+}
+
+function settingsBox() {
+  return () => {
+    const on = store.get("updateCheck", true);
+    $("modalBox").innerHTML = `
+      <h2>${esc(t("settings"))}</h2>
+      <h4>${esc(t("updates_title"))}</h4>
+      <label class="opt"><input type="checkbox" id="optUpdate"${on ? " checked" : ""}>
+        <span>${esc(t("update_check"))}</span></label>
+      <p>${esc(t("update_check_sub"))}</p>
+      <div class="acts"><button class="go" id="modalOk">${esc(t("close"))}</button></div>`;
+    $("optUpdate").onchange = () => { store.set("updateCheck", $("optUpdate").checked); checkUpdate(); };
+    $("modalOk").onclick = closeModal;
+  };
+}
+
 // ------------------------------------------------------------------ Démarrage
 
 function init() {
-  window.__TAURI__?.app?.getVersion?.().then((v) => { VERSION = v; S.modalFn?.(); }).catch(() => {});
+  Promise.resolve(window.__TAURI__?.app?.getVersion?.())
+    .then((v) => { if (v) VERSION = v; S.modalFn?.(); renderVersion(); return checkUpdate(); })
+    .catch(() => checkUpdate());
   if (api.demo) $("chip").insertAdjacentHTML("afterend", '<span class="demo" data-i18n="demo"></span>');
 
   document.querySelectorAll("#lang button").forEach((b) => (b.onclick = () => setLang(b.dataset.l)));
   $("about").onclick = () => modal(aboutBox(false));
+  $("settings").onclick = () => modal(settingsBox());
+  $("verBadge").onclick = () => (S.latest ? api.openReleases(RELEASES_PAGE).catch(() => {}) : modal(aboutBox(false)));
   $("modeSend").onclick = () => setMode("send");
   $("modeRecv").onclick = () => setMode("recv");
 
@@ -1078,6 +1142,7 @@ function init() {
   initPicker();
   api.onEvent(onEvent);
   applyLang();
+  renderVersion();
   renderNight();
   setMode(S.mode);
   if (!store.get("accepted", false)) modal(aboutBox(true));

@@ -71,8 +71,7 @@ Au premier lancement, Lugus Transfer affiche un avertissement de non-responsabil
 3. **Choisir un dossier / Choisir des fichiers** : la même chose avec la fenêtre du système, et cela s'ajoute aussi à ce qui est là. « Choisir des fichiers » permet d'en sélectionner plusieurs d'un coup.
 4. **Après la livraison** : ne rien faire, mettre l'ordinateur en veille ou l'éteindre une fois la livraison confirmée par le destinataire.
 5. **Bouton principal** : **Créer le lien** pour envoyer, **Recevoir** pour recevoir, puis **Arrêter** pendant un transfert.
-6. **FR / EN / ES** : change instantanément la langue de l'interface.
-7. **À propos** (le bouton *i*) : version, licence et avertissement.
+6. **En haut à droite** : le numéro de version, qui signale aussi une nouvelle version (voir plus bas), **FR / EN / ES** pour changer instantanément la langue, les **Réglages** (la roue dentée) et **À propos** (le bouton *i*) : licence et avertissement.
 
 Pendant un transfert, la partie droite affiche :
 - une frise d'**étapes numérotées**, l'étape en cours mise en évidence ;
@@ -83,6 +82,16 @@ Pendant un transfert, la partie droite affiche :
 En haut, le badge à côté du nom de l'application résume l'état : *Prêt*, *Préparation*, *Publication*, *En attente*, *Envoi*, *Recherche*, *Choix*, *Réception*, *Noctiluca*, *Vérifié*, *Erreur*, *Arrêté*.
 
 La ligne **La machine reste éveillée pendant le transfert** rappelle que Lugus Transfer empêche l'ordinateur de se mettre en veille tout seul pendant qu'il travaille.
+
+### Version et réglages
+
+Au lancement, Lugus Transfer demande une fois à GitHub si une version plus récente existe (les versions bêta comptent). Si c'est le cas, le numéro de version en haut à droite devient **vX.Y.Z disponible**, en bleu : un clic ouvre la page de téléchargement. Rien ne s'installe tout seul ; vous téléchargez la nouvelle version quand vous le décidez, de préférence entre deux transferts. Hors ligne, rien ne s'affiche et l'application fonctionne normalement.
+
+<p align="center"><img src="guide/15_update_fr.png" width="520" alt="Une nouvelle version est disponible"></p>
+
+La roue dentée ouvre les **Réglages**. La case **Vérifier les nouvelles versions** (1) est cochée par défaut ; décochez-la pour que l'application ne contacte jamais GitHub. Aucune autre donnée n'est envoyée lors de cette vérification.
+
+<p align="center"><img src="guide/16_settings_fr.png" width="620" alt="Les réglages"></p>
 
 ## 4. Envoyer des rushes, pas à pas
 
@@ -311,7 +320,7 @@ Oui. Rien n'est stocké entre les deux : les fichiers passent directement de l'u
 Un lien sert à une livraison. Pour envoyer les mêmes rushes à quelqu'un d'autre, créez un nouveau lien.
 
 **Qu'est-ce qui passe sur Internet ?**
-Pour être trouvé, l'expéditeur publie ses adresses réseau, signées par une clé à usage unique, dans la DHT publique de BitTorrent. Les fichiers, les noms de dossiers et le code ne sont jamais publiés : ils ne circulent que chiffrés, entre les deux ordinateurs.
+Pour être trouvé, l'expéditeur publie ses adresses réseau, signées par une clé à usage unique, dans la DHT publique de BitTorrent. Les fichiers, les noms de dossiers et le code ne sont jamais publiés : ils ne circulent que chiffrés, entre les deux ordinateurs. En dehors des transferts, l'application demande seulement à GitHub, au lancement, si une nouvelle version existe ; vous pouvez le désactiver dans les Réglages.
 
 **Le logiciel du monteur peut-il lire le MHL ?**
 Oui, c'est du MHL 1.1 en xxHash64, le standard lu par Silverstack, ShotPut Pro, Hedge et Bandua MHL Companion.

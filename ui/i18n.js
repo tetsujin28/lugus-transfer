@@ -4,6 +4,7 @@
 const I18N = {
   fr: {
     ready: "Prêt", demo: "Mode démo : données simulées", about: "À propos",
+    settings: "Réglages", updates_title: "Versions", update_check: "Vérifier les nouvelles versions", update_check_sub: "Une fois au lancement, l'application demande à GitHub si une version plus récente existe. Aucune autre donnée n'est envoyée. Désactive cette case pour qu'elle ne contacte jamais GitHub.", update_badge: "v{v} disponible", update_title: "Une nouvelle version est disponible : ouvrir la page de téléchargement", version_title: "Version de l'application",
     send: "Envoyer", receive: "Recevoir",
     what_to_send: "À envoyer", drop_title: "Glisse ici des dossiers ou des fichiers", drop_sub: "de plusieurs disques ou dossiers si besoin : ce que tu glisses s'ajoute à ce qui est déjà là",
     pick_folder_btn: "Choisir un dossier", pick_files_btn: "Choisir des fichiers", err_nothing: "Rien à envoyer.", clear_source: "Retirer", clear_source_title: "Retirer ces fichiers et recommencer le choix", clear_all: "Tout retirer", remove_source_title: "Retirer cette source", multi_note: "Le destinataire recevra un dossier avec un sous-dossier par source.", already_included: "Déjà inclus dans un dossier ajouté.", absorbed: "Ce dossier contient des éléments déjà ajoutés : ils en font maintenant partie.", files_word: "Fichiers", size_word: "Taille", read_fail: "Lecture impossible",
@@ -114,6 +115,7 @@ const I18N = {
 
   en: {
     ready: "Ready", demo: "Demo mode: simulated data", about: "About",
+    settings: "Settings", updates_title: "Versions", update_check: "Check for new versions", update_check_sub: "Once at startup, the app asks GitHub whether a newer version exists. Nothing else is sent. Untick this box so the app never contacts GitHub.", update_badge: "v{v} available", update_title: "A new version is available: open the download page", version_title: "Application version",
     send: "Send", receive: "Receive",
     what_to_send: "To send", drop_title: "Drop folders or files here", drop_sub: "from several drives or folders if needed: what you drop is added to what is already there",
     pick_folder_btn: "Choose a folder", pick_files_btn: "Choose files", err_nothing: "Nothing to send.", clear_source: "Remove", clear_source_title: "Remove these files and start the choice again", clear_all: "Remove all", remove_source_title: "Remove this source", multi_note: "The recipient will get one folder with a subfolder for each source.", already_included: "Already included in a folder you added.", absorbed: "This folder contains items you already added: they are now part of it.", files_word: "Files", size_word: "Size", read_fail: "Cannot read",
@@ -224,6 +226,7 @@ const I18N = {
 
   es: {
     ready: "Listo", demo: "Modo demo: datos simulados", about: "Acerca de",
+    settings: "Ajustes", updates_title: "Versiones", update_check: "Buscar nuevas versiones", update_check_sub: "Una vez al iniciar, la aplicación pregunta a GitHub si existe una versión más reciente. No se envía ningún otro dato. Desmarca esta casilla para que no contacte nunca con GitHub.", update_badge: "v{v} disponible", update_title: "Hay una nueva versión disponible: abrir la página de descarga", version_title: "Versión de la aplicación",
     send: "Enviar", receive: "Recibir",
     what_to_send: "A enviar", drop_title: "Arrastra aquí carpetas o archivos", drop_sub: "de varios discos o carpetas si hace falta: lo que sueltes se suma a lo que ya está",
     pick_folder_btn: "Elegir una carpeta", pick_files_btn: "Elegir archivos", err_nothing: "Nada que enviar.", clear_source: "Quitar", clear_source_title: "Quitar estos archivos y volver a elegir", clear_all: "Quitar todo", remove_source_title: "Quitar esta fuente", multi_note: "El destinatario recibirá una carpeta con una subcarpeta por cada fuente.", already_included: "Ya incluido en una carpeta añadida.", absorbed: "Esta carpeta contiene elementos ya añadidos: ahora forman parte de ella.", files_word: "Archivos", size_word: "Tamaño", read_fail: "Lectura imposible",

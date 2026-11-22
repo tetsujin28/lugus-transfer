@@ -71,8 +71,7 @@ On first launch, Lugus Transfer shows a disclaimer (1). Read it, then click **I 
 3. **Choose a folder / Choose files**: the same thing with the system window, and these also add to what is there. "Choose files" lets you pick several files at once.
 4. **After delivery**: do nothing, put the computer to sleep, or shut it down once the recipient has confirmed delivery.
 5. **Main button**: **Create the link** when sending, **Receive** when receiving, then **Stop** while a transfer is running.
-6. **FR / EN / ES**: switches the interface language instantly.
-7. **About** (the *i* button): version, license and disclaimer.
+6. **Top right**: the version number, which also tells you when a new version is out (see below), **FR / EN / ES** to switch the interface language instantly, **Settings** (the gear) and **About** (the *i* button): license and disclaimer.
 
 During a transfer, the right side shows:
 - a row of **numbered steps**, the current one highlighted;
@@ -83,6 +82,16 @@ During a transfer, the right side shows:
 At the top, the badge next to the app name sums up the state: *Ready*, *Preparing*, *Publishing*, *Waiting*, *Sending*, *Searching*, *Choosing*, *Receiving*, *Noctiluca*, *Verified*, *Error*, *Stopped*.
 
 The line **The machine stays awake during the transfer** reminds you that Lugus Transfer stops the computer from going to sleep on its own while it works.
+
+### Version and settings
+
+At startup, Lugus Transfer asks GitHub once whether a newer version exists (beta versions count). If so, the version number at the top right turns into **vX.Y.Z available**, in blue: one click opens the download page. Nothing installs itself; you download the new version when you decide to, ideally between two transfers. When offline, nothing is shown and the app works as usual.
+
+<p align="center"><img src="guide/15_update_en.png" width="520" alt="A new version is available"></p>
+
+The gear opens the **Settings**. The **Check for new versions** box (1) is ticked by default; untick it so the app never contacts GitHub. No other data is sent during this check.
+
+<p align="center"><img src="guide/16_settings_en.png" width="620" alt="The settings"></p>
 
 ## 4. Sending footage, step by step
 
@@ -311,7 +320,7 @@ Yes. Nothing is stored in between: the files go directly from one to the other. 
 One link is for one delivery. To send the same footage to someone else, create a new link.
 
 **What goes on the Internet?**
-To be found, the sender publishes its network addresses, signed by a one-time key, in the public BitTorrent DHT. The files, the folder names and the code are never published: they only travel encrypted between the two computers.
+To be found, the sender publishes its network addresses, signed by a one-time key, in the public BitTorrent DHT. The files, the folder names and the code are never published: they only travel encrypted between the two computers. Outside transfers, the app only asks GitHub, at startup, whether a new version exists; you can turn this off in the Settings.
 
 **Can the editor's software read the MHL?**
 Yes, it is MHL 1.1 with xxHash64, the standard read by Silverstack, ShotPut Pro, Hedge and Bandua MHL Companion.
