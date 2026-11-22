@@ -45,7 +45,7 @@ function applyLang() {
   $("vLabel").textContent = t(S.mode === "send" ? "verified_remote" : "verified_local");
   S.modalFn?.();
 }
-function setLang(l) { LANG = l; store.set("lang", l); applyLang(); }
+function setLang(l) { LANG = l; store.set("lang", l); applyLang(); renderVersion(); }
 
 // ------------------------------------------------------------------ Erreurs du moteur
 // Le moteur écrit ses erreurs en français. Les cas connus sont reconnus ici et
